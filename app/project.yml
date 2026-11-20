@@ -1,0 +1,61 @@
+name: Brokers
+options:
+  bundleIdPrefix: com.dobinkim
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: LYD6WV79Y4
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    DEAD_CODE_STRIPPING: YES
+targets:
+  Brokers:
+    type: application
+    platform: macOS
+    sources: [Brokers, Shared]
+    info:
+      path: Brokers/Info.plist
+      properties:
+        CFBundleDisplayName: Brokers
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.finance
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: Brokers/Brokers.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dobinkim.brokers
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: BrokersWidget
+  BrokersWidget:
+    type: app-extension
+    platform: macOS
+    sources: [BrokersWidget, Shared]
+    info:
+      path: BrokersWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Brokers
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: BrokersWidget/BrokersWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dobinkim.brokers.widget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
