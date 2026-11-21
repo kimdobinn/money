@@ -197,3 +197,74 @@ enum ISODate {
         return d
     }()
 }
+
+// MARK: - 관심 종목 (helper/brokerd/watchlist.py, engine.watchlist_view)
+
+struct WatchHolding: Codable, Equatable {
+    var quantity: Double
+    var avgCost: Double
+}
+
+struct WatchItem: Codable, Identifiable, Equatable {
+    var symbol: String
+    var name: String?
+    var englishName: String?
+    var exchange: String?
+    var market: String
+    var securityType: String?
+    var isETF: Bool
+    var currency: String?
+    var starred: Bool
+    var price: Double?
+    var prevClose: Double?
+    var change: Double?
+    var changePct: Double?
+    var priceTime: Date?
+    var spark: [Double]
+    var held: WatchHolding?
+    var id: String { symbol }
+    var ccy: String { currency ?? (market == "KR" ? "KRW" : "USD") }
+    /// Korean name when it differs from the ticker, else the English name.
+    var displayName: String {
+        if let n = name, !n.isEmpty, n != symbol { return n }
+        return englishName ?? symbol
+    }
+}
+
+struct WatchlistResponse: Codable, Equatable {
+    var available: Bool
+    var searchReady: Bool
+    var items: [WatchItem]
+}
+
+struct SearchResult: Codable, Identifiable, Equatable {
+    var symbol: String
+    var name: String?
+    var englishName: String?
+    var exchange: String?
+    var market: String
+    var securityType: String?
+    var isETF: Bool
+    var watched: Bool
+    var id: String { symbol }
+}
+
+struct SearchResponse: Codable {
+    var ready: Bool
+    var results: [SearchResult]
+}
+
+struct PricePoint: Codable, Identifiable, Equatable {
+    var t: Date
+    var price: Double
+    var id: Date { t }
+}
+
+struct PriceChart: Codable, Equatable {
+    var symbol: String
+    var range: String
+    var intraday: Bool
+    var market: String
+    var prevClose: Double?
+    var points: [PricePoint]
+}

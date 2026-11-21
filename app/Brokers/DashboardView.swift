@@ -3,10 +3,13 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("dashboardTab") private var tab = "portfolio"
 
     var body: some View {
         Group {
-            if let p = model.portfolio {
+            if tab == "watch" && model.helperReachable {
+                WatchlistView()
+            } else if let p = model.portfolio {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if p.demo { DemoBanner() }
@@ -27,6 +30,13 @@ struct DashboardView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("", selection: $tab) {
+                    Label("포트폴리오", systemImage: "chart.pie").tag("portfolio")
+                    Label("관심 종목", systemImage: "star").tag("watch")
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { Task { await model.refreshNow() } } label: { Image(systemName: "arrow.clockwise") }
                     .help("지금 새로고침")
@@ -110,6 +120,8 @@ struct KPICard: View {
 struct HistoryCard: View {
     @EnvironmentObject var model: AppModel
     @State private var selected: Date?
+    /// Shared by every value chart: false = zoom to the data range, true = Y axis starts at 0 (scale-correct).
+    @AppStorage("chartZeroBaseline") private var zeroBaseline = false
     static let ranges = ["1D", "1W", "1M", "3M", "YTD", "1Y", "ALL"]
 
     var body: some View {
@@ -132,6 +144,7 @@ struct HistoryCard: View {
                     }
                 }
                 Spacer()
+                YScaleToggle(zeroBaseline: $zeroBaseline)
                 Picker("", selection: $model.historyRange) {
                     ForEach(Self.ranges, id: \.self) { Text($0).tag($0) }
                 }
@@ -145,8 +158,9 @@ struct HistoryCard: View {
                 )
                 .frame(height: 260)
             } else {
-                let values = pts.map { m.convert($0.valueUSD ?? 0) }
-                let lo = (values.min() ?? 0) * 0.98, hi = (values.max() ?? 1) * 1.01
+                let values = pts.map { m.convert($0.valueUSD ?? 0) } + pts.compactMap { $0.costUSD.map(m.convert) }
+                let lo = zeroBaseline ? 0 : (values.min() ?? 0) * 0.98
+                let hi = (values.max() ?? 1) * (zeroBaseline ? 1.05 : 1.01)
                 Chart {
                     ForEach(pts) { p in
                         AreaMark(x: .value("t", p.t), yStart: .value("lo", lo), yEnd: .value("평가", m.convert(p.valueUSD ?? 0)))
@@ -163,8 +177,19 @@ struct HistoryCard: View {
                     }
                     if let sel = selected, let p = nearest(pts, sel) {
                         RuleMark(x: .value("t", p.t)).foregroundStyle(.secondary.opacity(0.4))
+                            .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                                HoverTag(
+                                    title: p.t.formatted(date: .abbreviated, time: model.history?.intraday == true ? .shortened : .omitted),
+                                    value: m.full(p.valueUSD ?? 0),
+                                    lines: hoverLines(p, first: first, m: m)
+                                )
+                            }
                         PointMark(x: .value("t", p.t), y: .value("평가", m.convert(p.valueUSD ?? 0)))
                             .foregroundStyle(Color.accentColor)
+                        if let c = p.costUSD {
+                            PointMark(x: .value("t", p.t), y: .value("원금", m.convert(c)))
+                                .foregroundStyle(.secondary).symbolSize(20)
+                        }
                     }
                 }
                 .chartYScale(domain: lo...max(hi, lo + 1))
@@ -175,6 +200,7 @@ struct HistoryCard: View {
                     }
                 }
                 .chartXSelection(value: $selected)
+                .animation(.easeInOut(duration: 0.3), value: zeroBaseline)
                 .frame(height: 260)
                 if hasCost {
                     HStack(spacing: 14) {
@@ -188,6 +214,20 @@ struct HistoryCard: View {
         .card()
     }
 
+    private func hoverLines(_ p: HistoryPoint, first: Double, m: Money) -> [(String, String, Color)] {
+        var out: [(String, String, Color)] = []
+        let v = p.valueUSD ?? 0
+        if first > 0 {
+            let d = v - first
+            out.append(("기간 시작 대비", "\(m.full(d, signed: true)) (\(Fmt.pct(d / first)))", model.colors.color(d)))
+        }
+        if let c = p.costUSD, c > 0 {
+            out.append(("투자원금", m.full(c), .secondary))
+            out.append(("손익", "\(m.full(v - c, signed: true)) (\(Fmt.pct((v - c) / c)))", model.colors.color(v - c)))
+        }
+        return out
+    }
+
     private func nearest(_ pts: [HistoryPoint], _ d: Date) -> HistoryPoint? {
         pts.min { abs($0.t.timeIntervalSince(d)) < abs($1.t.timeIntervalSince(d)) }
     }
@@ -195,6 +235,45 @@ struct HistoryCard: View {
     private func compactAxis(_ v: Double, _ m: Money) -> String {
         if m.currency == .KRW { return String(format: "%.1f억", v / 1e8) }
         return v >= 1e6 ? String(format: "%.2fM", v / 1e6) : String(format: "%.0fK", v / 1e3)
+    }
+}
+
+/// Floating value label shown above the hover cursor on charts.
+struct HoverTag: View {
+    let title: String
+    let value: String
+    var lines: [(String, String, Color)] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.callout.weight(.semibold)).monospacedDigit()
+            ForEach(lines.indices, id: \.self) { i in
+                HStack(spacing: 6) {
+                    Text(lines[i].0).foregroundStyle(.secondary)
+                    Text(lines[i].1).foregroundStyle(lines[i].2).monospacedDigit()
+                }
+                .font(.caption2)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+        .fixedSize()
+    }
+}
+
+/// Y-axis mode switch for value charts: zoomed (default) vs. starting at 0.
+struct YScaleToggle: View {
+    @Binding var zeroBaseline: Bool
+
+    var body: some View {
+        Picker("", selection: $zeroBaseline) {
+            Text("확대").tag(false)
+            Text("0부터").tag(true)
+        }
+        .pickerStyle(.segmented).labelsHidden().fixedSize()
+        .help("세로축: 확대 = 변동이 잘 보이게 데이터 범위에 맞춤 · 0부터 = 0에서 시작해 실제 비율대로 표시")
     }
 }
 

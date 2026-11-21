@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published var helperReachable = true
     @Published var lastUpdate: Date?
     @Published var toast: String?
+    @Published var watchlist: WatchlistResponse?
 
     let api = APIClient()
     private var loops: [Task<Void, Never>] = []
@@ -29,6 +30,7 @@ final class AppModel: ObservableObject {
         loops.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.loadPortfolio()
+                await self?.loadWatchlist()
                 try? await Task.sleep(for: .seconds(3))
             }
         })
@@ -56,6 +58,44 @@ final class AppModel: ObservableObject {
         } catch {
             helperReachable = false
         }
+    }
+
+    func loadWatchlist() async {
+        if let w: WatchlistResponse = try? await api.get("v1/watchlist"), w != watchlist { watchlist = w }
+    }
+
+    // MARK: - 관심 종목
+
+    func search(_ q: String) async -> [SearchResult] {
+        let r: SearchResponse? = try? await api.get("v1/search", query: ["q": q])
+        return r?.results ?? []
+    }
+
+    func addWatch(_ symbol: String) async {
+        do {
+            let w: WatchlistResponse = try await api.write("POST", "v1/watchlist", body: ["symbol": symbol])
+            watchlist = w
+            flash("\(symbol) 관심 종목에 추가했어요")
+        } catch {
+            flash(error.localizedDescription)
+        }
+    }
+
+    func removeWatch(_ symbol: String) async {
+        if let w: WatchlistResponse = try? await api.write("DELETE", "v1/watchlist/\(symbol)") { watchlist = w }
+    }
+
+    func setStar(_ symbol: String, _ starred: Bool) async {
+        if let i = watchlist?.items.firstIndex(where: { $0.symbol == symbol }) {
+            watchlist?.items[i].starred = starred  // optimistic
+        }
+        if let w: WatchlistResponse = try? await api.write("PUT", "v1/watchlist/\(symbol)", body: ["starred": starred]) {
+            watchlist = w
+        }
+    }
+
+    func chart(_ symbol: String, range: String) async throws -> PriceChart {
+        try await api.get("v1/chart", query: ["symbol": symbol, "range": range])
     }
 
     func loadStatus() async {

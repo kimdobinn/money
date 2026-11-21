@@ -77,6 +77,8 @@ class TossClient:
             "MARKET_INFO": _Limiter(2),
             "MARKET_DATA": _Limiter(10),
             "MARKET_DATA_CHART": _Limiter(15),
+            "STOCK": _Limiter(4),
+            "STOCK_ALL": _Limiter(0.9),
             "ORDER_INFO": _Limiter(2),
         }
 
@@ -177,6 +179,24 @@ class TossClient:
         if before:
             params["before"] = before
         return await self._get("/api/v1/candles", "MARKET_DATA_CHART", params) or {}
+
+    async def candles(self, symbol: str, interval: str, count: int = 200, before: str | None = None) -> dict:
+        params = {"symbol": symbol, "interval": interval, "count": count, "adjusted": "true"}
+        if before:
+            params["before"] = before
+        return await self._get("/api/v1/candles", "MARKET_DATA_CHART", params) or {}
+
+    async def stocks(self, symbols: list[str]) -> list[dict]:
+        """Reference data (name, englishName, market, securityType, currency) — max 200 per call."""
+        out: list[dict] = []
+        for i in range(0, len(symbols), 200):
+            res = await self._get("/api/v1/stocks", "STOCK", {"symbols": ",".join(symbols[i : i + 200])})
+            out.extend(res or [])
+        return out
+
+    async def stocks_all(self, market: str) -> list[dict]:
+        """Whole tradable universe of one exchange (daily batch data)."""
+        return await self._get("/api/v1/stocks/all", "STOCK_ALL", {"market": market}) or []
 
     async def transactions(self, types: list[str], since: date | None = None) -> list[dict]:
         out, cursor = [], None

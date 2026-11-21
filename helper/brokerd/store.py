@@ -17,6 +17,13 @@ CREATE TABLE IF NOT EXISTS trades(
   id TEXT PRIMARY KEY, broker TEXT, symbol TEXT, currency TEXT, qty REAL, price REAL, date TEXT);
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS fx_hist(minute TEXT PRIMARY KEY, usdkrw REAL);
+CREATE TABLE IF NOT EXISTS watchlist(
+  symbol TEXT PRIMARY KEY, name TEXT, english_name TEXT, exchange TEXT, security_type TEXT,
+  currency TEXT, starred INTEGER DEFAULT 0, added_at INTEGER);
+CREATE TABLE IF NOT EXISTS universe(
+  symbol TEXT PRIMARY KEY, name TEXT, english_name TEXT, exchange TEXT, security_type TEXT);
+CREATE TABLE IF NOT EXISTS hourly(ts INTEGER PRIMARY KEY, value_usd REAL);
+CREATE TABLE IF NOT EXISTS candles_d(symbol TEXT, date TEXT, close REAL, PRIMARY KEY(symbol, date));
 """
 
 
@@ -43,6 +50,14 @@ class Store:
 
     def snapshots_since(self, ts: int):
         return self._x("SELECT ts, value_usd, cost_usd FROM snapshots WHERE ts >= ? ORDER BY ts", (ts,))
+
+    def hourly_since(self, ts: int):
+        return self._x("SELECT ts, value_usd FROM hourly WHERE ts >= ? ORDER BY ts", (ts,))
+
+    def put_hourly(self, rows: list[tuple[int, float]]):
+        with self.lock:
+            self.db.executemany("INSERT OR REPLACE INTO hourly VALUES(?,?)", rows)
+            self.db.commit()
 
     def daily_since(self, d: str):
         return self._x("SELECT date, value_usd, cost_usd FROM daily WHERE date >= ? ORDER BY date", (d,))

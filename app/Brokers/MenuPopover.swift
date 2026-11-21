@@ -4,6 +4,8 @@ struct MenuPopover: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @AppStorage("dashboardTab") private var tab = "portfolio"
+    @AppStorage("watchSelected") private var watchSelected = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -68,6 +70,25 @@ struct MenuPopover: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+
+            let starred = (model.watchlist?.items ?? []).filter(\.starred)
+            if !starred.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("즐겨찾기", systemImage: "star.fill").font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(starred) { it in
+                        Button {
+                            tab = "watch"
+                            watchSelected = it.symbol
+                            openWindow(id: "dashboard")
+                            WindowPresence.show()
+                        } label: {
+                            MiniWatchRow(item: it, colors: c).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
         .padding(16)
     }
@@ -118,6 +139,25 @@ struct MiniPositionRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(colors.color(pos.dayChangePct))
             }
+        }
+    }
+}
+
+struct MiniWatchRow: View {
+    let item: WatchItem
+    let colors: PLColors
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(item.symbol).font(.callout.weight(.semibold))
+            Text(item.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Sparkline(values: item.spark + (item.price.map { [$0] } ?? []), color: colors.color(item.changePct))
+                .frame(width: 44, height: 16)
+            Text(Fmt.price(item.price, currency: item.ccy)).font(.callout.monospacedDigit())
+            Text(Fmt.arrowPct(item.changePct)).font(.caption.monospacedDigit())
+                .foregroundStyle(colors.color(item.changePct))
+                .frame(width: 62, alignment: .trailing)
         }
     }
 }

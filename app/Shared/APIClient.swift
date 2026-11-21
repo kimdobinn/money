@@ -17,7 +17,7 @@ struct APIClient {
 
     var session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 8
+        c.timeoutIntervalForRequest = 30  // first chart load of a long history can take a few seconds
         return URLSession(configuration: c)
     }()
 

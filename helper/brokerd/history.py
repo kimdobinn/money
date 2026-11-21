@@ -5,7 +5,8 @@ import hashlib
 import logging
 from bisect import bisect_right
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from .connectors.toss import TossClient, _f
 from .models import norm_symbol
@@ -70,6 +71,73 @@ async def daily_closes(client: TossClient, symbol: str, start: date) -> list[tup
     return rows
 
 
+INTRADAY_DAYS = 31
+
+
+async def _hourly_closes(client: TossClient, symbol: str, since: datetime) -> dict[int, float]:
+    """Last 1-minute close of every hour since `since` (unix hour -> close)."""
+    out: dict[int, float] = {}
+    before = None
+    for _ in range(400):
+        res = await client.candles(symbol, "1m", 200, before=before)
+        candles = res.get("candles") or []
+        oldest = None
+        for c in candles:
+            ts = c.get("timestamp")
+            px = _f(c.get("closePrice"))
+            if not ts or px is None:
+                continue
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            oldest = t
+            # candle timestamp = end of minute; bucket into the hour it closes
+            hour = int((t.timestamp() - 1) // 3600 * 3600)
+            out.setdefault(hour, px)  # candles are newest-first -> first seen = last close of hour
+        before = res.get("nextBefore")
+        if not candles or not before or (oldest and oldest < since):
+            break
+    return out
+
+
+async def backfill_intraday(engine, all_trades, current, trades_by) -> int:
+    """Hourly equity curve for the last month from 1-minute candles (denser 1W/1M charts)."""
+    client: TossClient = engine.toss.client
+    since = datetime.now(timezone.utc) - timedelta(days=INTRADAY_DAYS)
+    since_d = since.date().isoformat()
+    fx = engine.fx_to_usd()
+    syms = [
+        k for k in set(current) | {(t[1], t[2]) for t in all_trades}
+        if k[1] in fx and (current.get(k, 0) > 1e-9 or any(d >= since_d for d, _ in trades_by.get(k, [])))
+    ]
+    series: dict[tuple[str, str], dict[int, float]] = {}
+    for key in syms:
+        try:
+            series[key] = await _hourly_closes(client, key[0], since)
+        except Exception as e:  # noqa: BLE001
+            log.info("no 1m candles for %s: %s", key[0], e)
+    hours = sorted({h for s in series.values() for h in s if h >= since.timestamp()})
+    ny = ZoneInfo("America/New_York")
+    last: dict[tuple[str, str], float] = {}
+    # seed carry-forward prices with the newest close before the window
+    for key, s in series.items():
+        older = [h for h in s if h < since.timestamp()]
+        if older:
+            last[key] = s[max(older)]
+    rows = []
+    for h in hours:
+        d = datetime.fromtimestamp(h, ny).date().isoformat()
+        total = 0.0
+        for key, s in series.items():
+            if h in s:
+                last[key] = s[h]
+            qty = current.get(key, 0.0) - sum(q for td, q in trades_by.get(key, []) if td > d)
+            if qty > 1e-9 and key in last:
+                total += qty * last[key] * fx[key[1]]
+        if total > 0:
+            rows.append((h, round(total, 2)))
+    engine.store.put_hourly(rows)
+    return len(rows)
+
+
 async def backfill(engine) -> str:
     """Returns a human-readable summary. Raises on hard failure."""
     toss: TossClient | None = engine.toss.client if engine.toss else None
@@ -130,7 +198,13 @@ async def backfill(engine) -> str:
             total += qty * cs[i] * fx[key[1]]
         out.append((d, round(total, 2)))
     engine.store.upsert_backfill(out)
-    msg = f"{len(days)}일치 히스토리 복원 완료 (거래 {len(all_trades)}건)"
+    try:
+        n_hours = await backfill_intraday(engine, all_trades, current, trades_by)
+    except Exception as e:  # noqa: BLE001
+        log.warning("intraday backfill failed: %r", e)
+        n_hours = 0
+    msg = f"{len(days)}일치 히스토리 복원 완료 (거래 {len(all_trades)}건"
+    msg += f", 최근 한 달 시간별 {n_hours}개)" if n_hours else ")"
     if skipped:
         msg += f" · 시세 없음: {', '.join(sorted(set(skipped)))}"
     return msg

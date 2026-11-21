@@ -47,6 +47,58 @@ def status():
     return engine.status()
 
 
+# ---- 관심 종목 --------------------------------------------------------------
+def _toss():
+    if not engine.toss:
+        raise HTTPException(409, "토스 계정을 연결해야 관심 종목 시세를 볼 수 있어요")
+    return engine.toss.client
+
+
+@app.get("/v1/watchlist")
+def watchlist():
+    return engine.watchlist_view()
+
+
+@app.get("/v1/search")
+def search(q: str = ""):
+    return {"ready": bool(engine.store.meta_get("universe_at")), "results": engine.watchlist.search(q)}
+
+
+@app.get("/v1/chart")
+async def chart(symbol: str, range: str = "1Y"):  # noqa: A002
+    client = _toss()
+    try:
+        return await engine.watchlist.chart(client, symbol, range)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"차트를 불러오지 못했어요: {e}") from e
+
+
+@app.post("/v1/watchlist")
+async def watch_add(body: dict = Body(...), x_brokers_token: str | None = Header(None)):
+    _auth(x_brokers_token)
+    try:
+        await engine.watchlist.add(_toss(), str(body.get("symbol", "")))
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    engine._quote_kick.set()
+    return engine.watchlist_view()
+
+
+@app.put("/v1/watchlist/{symbol}")
+def watch_update(symbol: str, body: dict = Body(...), x_brokers_token: str | None = Header(None)):
+    _auth(x_brokers_token)
+    if "starred" in body:
+        engine.watchlist.set_starred(symbol, bool(body["starred"]))
+    return engine.watchlist_view()
+
+
+@app.delete("/v1/watchlist/{symbol}")
+def watch_remove(symbol: str, x_brokers_token: str | None = Header(None)):
+    _auth(x_brokers_token)
+    engine.watchlist.remove(symbol)
+    return engine.watchlist_view()
+
+
 @app.put("/v1/settings")
 async def put_settings(patch: dict = Body(...), x_brokers_token: str | None = Header(None)):
     _auth(x_brokers_token)

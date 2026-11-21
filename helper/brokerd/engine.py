@@ -17,6 +17,7 @@ from .demo import Demo
 from .fxcost import KRWCost
 from .models import BrokerSnapshot, Quote
 from .store import Store
+from .watchlist import Watchlist
 
 log = logging.getLogger("brokerd.engine")
 NY = ZoneInfo("America/New_York")
@@ -36,6 +37,7 @@ class Engine:
         self.public_ip: str | None = None
         self.backfill_state = {"running": False, "lastRun": None, "message": None}
         self.krw_cost = KRWCost(self.store)
+        self.watchlist = Watchlist(self.store)
         self._krw_sig: tuple | None = None
         self._krw_at = 0.0
         self._krw_task: asyncio.Task | None = None
@@ -43,6 +45,7 @@ class Engine:
         self._gw_task: asyncio.Task | None = None
         self._flex_kick = asyncio.Event()
         self._holdings_kick = asyncio.Event()
+        self._quote_kick = asyncio.Event()
 
     # ---- lifecycle ---------------------------------------------------------
     async def start(self) -> None:
@@ -55,6 +58,7 @@ class Engine:
             self._snapshot_loop(),
             self._ip_loop(),
             self._auto_backfill(),
+            self._watch_loop(),
         ):
             self._tasks.append(asyncio.create_task(coro))
 
@@ -169,19 +173,64 @@ class Engine:
         intraday = days <= 7
         if self.is_demo():
             return {"range": rng, "intraday": intraday, "points": self.demo.history(min(days, 900), intraday)}
-        if intraday:
-            rows = self.store.snapshots_since(int(time.time()) - days * 86400)
-            pts = [
-                {"t": datetime.fromtimestamp(ts, timezone.utc).isoformat(), "valueUSD": v, "costUSD": c}
-                for ts, v, c in rows
-            ]
-        else:
+        # Densest data available: 5-min live snapshots, then the hourly backfill (last month),
+        # then one point per day. Buckets keep long ranges light.
+        bucket = {"1D": 300, "1W": 900, "1M": 3600, "3M": 3 * 3600, "YTD": 12 * 3600, "1Y": 12 * 3600}.get(rng)
+        since_ts = int(time.time()) - days * 86400
+        dense: dict[int, tuple[int, float, float | None]] = {}
+        if bucket:
+            for ts, v, c in self.store.snapshots_since(since_ts):
+                dense[ts // bucket] = (ts, v, c)
+            for ts, v in self.store.hourly_since(since_ts):
+                dense.setdefault(ts // bucket, (ts, v, None))
+        rows = sorted(dense.values())
+        pts = [
+            {"t": datetime.fromtimestamp(ts, timezone.utc).isoformat(), "valueUSD": v, "costUSD": c}
+            for ts, v, c in rows
+        ]
+        if not intraday:
+            covered = {datetime.fromtimestamp(ts, NY).date().isoformat() for ts, _, _ in rows}
             since = (now.date() - timedelta(days=days)).isoformat()
-            pts = [
+            pts += [
                 {"t": f"{d}T21:00:00+00:00", "valueUSD": v, "costUSD": c}
                 for d, v, c in self.store.daily_since(since)
+                if d not in covered
             ]
+            pts.sort(key=lambda p: p["t"])
+        intraday = intraday or bool(rows)
         return {"range": rng, "intraday": intraday, "points": pts}
+
+    def watchlist_view(self) -> dict:
+        held: dict[str, dict] = {}
+        if not self.is_demo():
+            for s in self.broker_snapshots():
+                for l in s.legs:
+                    h = held.setdefault(l.symbol, {"quantity": 0.0, "cost": 0.0})
+                    h["quantity"] += l.quantity
+                    h["cost"] += l.quantity * l.avg_cost
+        items = []
+        for e in self.watchlist.entries():
+            q = self.quotes.get(e["symbol"])
+            price = q.price if q else None
+            prev = q.prev_close if q else None
+            chg = (price - prev) if (price is not None and prev) else None
+            h = held.get(e["symbol"])
+            items.append({
+                **e,
+                "price": price,
+                "prevClose": prev,
+                "change": chg,
+                "changePct": (chg / prev) if (chg is not None and prev) else None,
+                "priceTime": q.ts.isoformat() if q and q.ts else None,
+                "spark": self.watchlist.spark(e["symbol"]),
+                "held": {"quantity": h["quantity"], "avgCost": h["cost"] / h["quantity"]}
+                if h and h["quantity"] else None,
+            })
+        return {
+            "available": bool(self.toss),
+            "searchReady": bool(self.store.meta_get("universe_at")),
+            "items": items,
+        }
 
     def status(self) -> dict:
         ib = self.settings["ibkr"]
@@ -253,14 +302,15 @@ class Engine:
                     await self._refresh_quotes()
             except Exception as e:  # noqa: BLE001
                 log.warning("quote loop: %s", e)
-            await asyncio.sleep(3)
+            await self._sleep_or_kick(3, self._quote_kick)
 
     async def _refresh_quotes(self):
         snaps = self.broker_snapshots()
-        syms = sorted({l.symbol for s in snaps for l in s.legs if l.market in ("US", "KR")})
+        watched = self.watchlist.symbols()
+        syms = sorted({l.symbol for s in snaps for l in s.legs if l.market in ("US", "KR")} | set(watched))
         fresh = await self.toss.quotes(syms)
         toss_prev = {l.symbol: l.prev_close for l in self.toss.snapshot.legs if l.prev_close}
-        markets = {l.symbol: l.market for s in snaps for l in s.legs}
+        markets = {**watched, **{l.symbol: l.market for s in snaps for l in s.legs}}
         fetched = 0
         for sym, q in fresh.items():
             if sym in toss_prev:
@@ -310,7 +360,8 @@ class Engine:
         while True:
             try:
                 if not self.is_demo():
-                    snaps = self.broker_snapshots()
+                    # ignore brokers that never delivered data (e.g. IB Gateway not logged in)
+                    snaps = [s for s in self.broker_snapshots() if s.legs or s.status in ("ok", "stale")]
                     if snaps and all(s.status in ("ok", "stale") for s in snaps):
                         p = self.portfolio()["totals"]
                         if p["marketValueUSD"] > 0:
@@ -346,6 +397,21 @@ class Engine:
             if live and live != self.store.meta_get("backfill_brokers"):
                 await self.run_backfill()
                 self.store.meta_set("backfill_brokers", live)
+
+    async def _watch_loop(self):
+        """Daily symbol-universe refresh + keep watchlist sparklines warm."""
+        await asyncio.sleep(5)
+        while True:
+            t = self.toss
+            if t:
+                await self.watchlist.ensure_universe(t.client)
+                start = datetime.now(NY).date() - timedelta(days=45)
+                for sym in list(self.watchlist.symbols()):
+                    try:
+                        await self.watchlist.daily(t.client, sym, start)
+                    except Exception as e:  # noqa: BLE001
+                        log.info("watch candles %s: %r", sym, e)
+            await asyncio.sleep(600)
 
     async def run_backfill(self) -> dict:
         from .history import backfill
