@@ -85,6 +85,22 @@ final class AppModel: ObservableObject {
         if let w: WatchlistResponse = try? await api.write("DELETE", "v1/watchlist/\(symbol)") { watchlist = w }
     }
 
+    /// Drag-and-drop reorder within one section (즐겨찾기 or the rest).
+    func moveWatch(starred: Bool, from: IndexSet, to: Int) {
+        guard var items = watchlist?.items else { return }
+        var section = items.filter { $0.starred == starred }
+        section.move(fromOffsets: from, toOffset: to)
+        let rest = items.filter { $0.starred != starred }
+        items = starred ? section + rest : rest + section
+        watchlist?.items = items  // optimistic
+        let order = items.map(\.symbol)
+        Task {
+            if let w: WatchlistResponse = try? await api.write("PUT", "v1/watchlist-order", body: ["symbols": order]) {
+                watchlist = w
+            }
+        }
+    }
+
     func setStar(_ symbol: String, _ starred: Bool) async {
         if let i = watchlist?.items.firstIndex(where: { $0.symbol == symbol }) {
             watchlist?.items[i].starred = starred  // optimistic

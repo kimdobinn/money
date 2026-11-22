@@ -21,6 +21,7 @@ struct BrokersApp: App {
         MenuBarExtra {
             MenuPopover()
                 .environmentObject(model)
+                .scaledFonts()
         } label: {
             MenuBarLabel()
                 .environmentObject(model)
@@ -31,15 +32,18 @@ struct BrokersApp: App {
         Window("Brokers", id: "dashboard") {
             DashboardView()
                 .environmentObject(model)
+                .scaledFonts()
                 .frame(minWidth: 980, minHeight: 700)
                 .onAppear { WindowPresence.show() }
                 .onDisappear { WindowPresence.hideIfNoWindows() }
         }
         .defaultSize(width: 1180, height: 860)
+        .commands { FontScaleCommands() }
 
         Settings {
             SettingsView()
                 .environmentObject(model)
+                .scaledFonts()
                 .onAppear { WindowPresence.show() }
                 .onDisappear { WindowPresence.hideIfNoWindows() }
         }

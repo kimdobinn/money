@@ -64,10 +64,10 @@ struct HoldingsCard: View {
             .sorted(using: sortOrder)
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("보유 종목").font(.headline)
-                Text("두 증권사 합산 · ▸ 를 눌러 증권사별·원화 평단 보기").font(.caption).foregroundStyle(.secondary)
+                Text("보유 종목").font(.s(.headline))
+                Text("두 증권사 합산 · ▸ 를 눌러 증권사별·원화 평단 보기").font(.s(.caption)).foregroundStyle(.secondary)
                 Spacer()
-                TextField("종목 검색", text: $search).textFieldStyle(.roundedBorder).frame(width: 180)
+                TextField("종목 검색", text: $search).textFieldStyle(.roundedBorder).frame(width: UIScale.pt(180))
             }
             Table(rows, children: \.children, sortOrder: $sortOrder) {
                 TableColumn("종목", value: \.symbol) { r in
@@ -77,7 +77,7 @@ struct HoldingsCard: View {
                             VStack(alignment: .leading, spacing: 0) {
                                 Text(r.symbol).foregroundStyle(.secondary)
                                 if let note = r.krwNote {
-                                    Text(note).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    Text(note).font(.s(.caption2)).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
                             .help(r.krwNote.map { $0 + "\n원화 평단 = 매수 시점 환율 기준 (토스 앱과 소폭 다를 수 있음)" } ?? "")
@@ -87,33 +87,33 @@ struct HoldingsCard: View {
                                     Text(r.symbol).fontWeight(.semibold)
                                     ForEach(r.brokers, id: \.self) { b in
                                         Text(BrokerStyle.short(b))
-                                            .font(.system(size: 9, weight: .medium))
+                                            .font(.system(size: UIScale.pt(9), weight: .medium))
                                             .padding(.horizontal, 4).padding(.vertical, 1)
                                             .background(BrokerStyle.color(b).opacity(0.2), in: Capsule())
                                     }
                                 }
-                                Text(r.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(r.name).font(.s(.caption)).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                     }
                 }
-                .width(min: 150, ideal: 200)
-                TableColumn("수량") { r in num(Fmt.qty(r.quantity)) }.width(70)
-                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)) }.width(90)
-                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)) }.width(90)
+                .width(min: UIScale.pt(150), ideal: UIScale.pt(200))
+                TableColumn("수량") { r in num(Fmt.qty(r.quantity)) }.width(UIScale.pt(70))
+                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)) }.width(UIScale.pt(90))
+                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)) }.width(UIScale.pt(90))
                 TableColumn("오늘", value: \.sortDay) { r in
                     num(r.isLeg ? "" : Fmt.pct(r.dayChangePct)).foregroundStyle(colors.color(r.dayChangePct))
-                }.width(75)
+                }.width(UIScale.pt(75))
                 TableColumn("평가금액", value: \.sortValue) { r in
                     num(r.marketValue.map { Fmt.amount($0, currency: r.currency) } ?? "—")
-                }.width(110)
+                }.width(UIScale.pt(110))
                 TableColumn("손익", value: \.sortPL) { r in
                     num(r.unrealizedPL.map { Fmt.amount($0, currency: r.currency, signed: true) } ?? "—")
                         .foregroundStyle(colors.color(r.unrealizedPL))
-                }.width(105)
+                }.width(UIScale.pt(105))
                 TableColumn("수익률", value: \.sortPLPct) { r in
                     num(Fmt.pct(r.unrealizedPLPct)).foregroundStyle(colors.color(r.unrealizedPLPct))
-                }.width(80)
+                }.width(UIScale.pt(80))
                 TableColumn("비중", value: \.sortWeight) { r in
                     if let w = r.weight {
                         HStack(spacing: 6) {
@@ -124,13 +124,13 @@ struct HoldingsCard: View {
                                     }
                             }
                             .frame(height: 5)
-                            Text(Fmt.pct(w, signed: false)).font(.caption.monospacedDigit()).frame(width: 46, alignment: .trailing)
+                            Text(Fmt.pct(w, signed: false)).font(.s(.caption).monospacedDigit()).frame(width: UIScale.pt(46), alignment: .trailing)
                         }
                     }
-                }.width(min: 100, ideal: 120)
+                }.width(min: UIScale.pt(100), ideal: UIScale.pt(120))
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
-            .frame(minHeight: CGFloat(min(14, max(4, rows.count + 1))) * 34 + 30)
+            .frame(minHeight: CGFloat(min(14, max(4, rows.count + 1))) * UIScale.pt(34) + 30)
         }
         .card()
     }

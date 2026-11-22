@@ -31,6 +31,10 @@ class Store:
     def __init__(self, path=DB_PATH):
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript(_SCHEMA)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(watchlist)")]
+        if "position" not in cols:  # added after the first release
+            self.db.execute("ALTER TABLE watchlist ADD COLUMN position INTEGER")
+            self.db.commit()
         self.lock = threading.Lock()
 
     def _x(self, sql, args=()):
@@ -77,6 +81,13 @@ class Store:
                 "INSERT OR REPLACE INTO trades VALUES(:id,:broker,:symbol,:currency,:qty,:price,:date)", trades
             )
             self.db.commit()
+
+    def trade_flows(self):
+        """(date, currency, qty, price) ordered by date; price is NULL for splits/transfers."""
+        return self._x("SELECT date, currency, qty, price FROM trades ORDER BY date")
+
+    def trade_symbols(self):
+        return self._x("SELECT symbol, currency, qty, price FROM trades ORDER BY date")
 
     def all_trades(self):
         return self._x("SELECT broker, symbol, currency, qty, date FROM trades ORDER BY date")

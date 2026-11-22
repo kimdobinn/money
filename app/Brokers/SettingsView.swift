@@ -68,7 +68,7 @@ struct AccountsTab: View {
                     .keyboardShortcut(.defaultAction)
                 }
                 Text("토스증권 웹(WTS) > 설정 > Open API 에서 발급하고, 같은 화면의 '허용 IP 관리'에 위 IP를 등록하세요. 키는 macOS Keychain에만 저장됩니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.s(.caption)).foregroundStyle(.secondary)
             }
 
             Section {
@@ -95,7 +95,7 @@ struct AccountsTab: View {
                     }
                 }
                 Text("IB Gateway 설정 > API > Settings 에서 'Enable ActiveX and Socket Clients' 켜기, 'Read-Only API' 켜기, 포트 4001(실계좌). 헬퍼는 읽기 전용으로만 접속합니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.s(.caption)).foregroundStyle(.secondary)
             }
 
             Section {
@@ -117,7 +117,7 @@ struct AccountsTab: View {
                     }
                 }
                 Text("IBKR 포털 > Performance & Reports > Flex Queries 에서 Activity Flex Query(Open Positions, Cash Report, Trades, 기간 Last 365 Days)를 만들고, Flex Web Service에서 토큰을 발급하세요.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.s(.caption)).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -144,12 +144,12 @@ struct ConnectorHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(title).font(.headline)
+                Text(title).font(.s(.headline))
                 Spacer()
                 Circle().fill(StatusDots.color(status)).frame(width: 8, height: 8)
-                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(label).font(.s(.caption)).foregroundStyle(.secondary)
             }
-            if let message { Text(message).font(.caption).foregroundStyle(.orange) }
+            if let message { Text(message).font(.s(.caption)).foregroundStyle(.orange) }
         }
     }
 
@@ -168,10 +168,17 @@ struct ConnectorHeader: View {
 
 struct DisplayTab: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage(UIScale.key) private var fontScale = 1.0
 
     var body: some View {
         let s = model.status?.settings
         Form {
+            Picker("글자 크기", selection: $fontScale) {
+                ForEach(UIScale.steps, id: \.0) { v, name in
+                    Text("\(name) (\(Int(v * 100))%)").tag(v)
+                }
+            }
+            .help("대시보드·메뉴바 창의 글자 크기. 단축키 ⌘+ / ⌘- / ⌘0")
             Picker("표시 통화", selection: bind(s?.displayCurrency ?? "SGD", key: "displayCurrency")) {
                 Text("SGD (S$)").tag("SGD"); Text("USD ($)").tag("USD"); Text("KRW (₩)").tag("KRW")
             }
@@ -204,15 +211,15 @@ struct HistoryTab: View {
         Form {
             Section("과거 히스토리 복원") {
                 Text("토스 거래내역과 IBKR Flex 거래내역, 과거 일별 종가로 계좌 개설 이후의 자산 추이를 다시 계산합니다. 계정을 처음 연결하면 자동으로 한 번 실행됩니다.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.s(.callout)).foregroundStyle(.secondary)
                 HStack {
                     if b?.running == true { ProgressView().controlSize(.small) }
-                    Text(b?.message ?? "아직 실행하지 않음").font(.callout)
+                    Text(b?.message ?? "아직 실행하지 않음").font(.s(.callout))
                     Spacer()
                     Button("지금 다시 복원") { Task { await model.runBackfill() } }
                         .disabled(b?.running == true || model.status?.demo == true)
                 }
-                if let last = b?.lastRun { Text("마지막 실행 \(Fmt.relative(last))").font(.caption).foregroundStyle(.secondary) }
+                if let last = b?.lastRun { Text("마지막 실행 \(Fmt.relative(last))").font(.s(.caption)).foregroundStyle(.secondary) }
             }
             Section("진단") {
                 Button("헬퍼 로그 열기") {

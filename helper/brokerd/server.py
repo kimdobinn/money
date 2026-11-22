@@ -84,6 +84,13 @@ async def watch_add(body: dict = Body(...), x_brokers_token: str | None = Header
     return engine.watchlist_view()
 
 
+@app.put("/v1/watchlist-order")
+def watch_order(body: dict = Body(...), x_brokers_token: str | None = Header(None)):
+    _auth(x_brokers_token)
+    engine.watchlist.set_order([str(s) for s in body.get("symbols") or []])
+    return engine.watchlist_view()
+
+
 @app.put("/v1/watchlist/{symbol}")
 def watch_update(symbol: str, body: dict = Body(...), x_brokers_token: str | None = Header(None)):
     _auth(x_brokers_token)

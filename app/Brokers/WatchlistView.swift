@@ -11,7 +11,7 @@ struct WatchlistView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar.frame(width: 340)
+            sidebar.frame(width: UIScale.pt(340))
             Divider()
             Group {
                 if let item = model.watchlist?.items.first(where: { $0.symbol == selected }) {
@@ -86,12 +86,12 @@ struct WatchlistView: View {
                                 Badge(r.exchange ?? r.market, .gray)
                             }
                             Text([r.name, r.englishName].compactMap { $0 }.filter { $0 != r.symbol }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.s(.caption)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                         Image(systemName: r.watched ? "checkmark.circle.fill" : "plus.circle")
                             .foregroundStyle(r.watched ? Color.green : Color.accentColor)
-                            .font(.title3)
+                            .font(.s(.title3))
                     }
                     .contentShape(Rectangle())
                 }
@@ -125,10 +125,16 @@ struct WatchlistView: View {
             let others = items.filter { !$0.starred }
             List(selection: Binding(get: { selected }, set: { if let s = $0 { selected = s } })) {
                 if !starred.isEmpty {
-                    Section("즐겨찾기") { ForEach(starred) { row($0) } }
+                    Section("즐겨찾기") {
+                        ForEach(starred) { row($0) }
+                            .onMove { model.moveWatch(starred: true, from: $0, to: $1) }
+                    }
                 }
                 if !others.isEmpty {
-                    Section(starred.isEmpty ? "관심 종목" : "그 외") { ForEach(others) { row($0) } }
+                    Section(starred.isEmpty ? "관심 종목" : "그 외") {
+                        ForEach(others) { row($0) }
+                            .onMove { model.moveWatch(starred: false, from: $0, to: $1) }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -154,6 +160,7 @@ struct WatchRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            DragHandle()
             Button(action: toggleStar) {
                 Image(systemName: item.starred ? "star.fill" : "star")
                     .foregroundStyle(item.starred ? Color.yellow : Color.secondary)
@@ -166,19 +173,37 @@ struct WatchRow: View {
                     if item.isETF { Badge("ETF", .purple) }
                     if item.held != nil { Badge("보유", .blue) }
                 }
-                Text(item.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.displayName).font(.s(.caption)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             Sparkline(values: item.spark + (item.price.map { [$0] } ?? []), color: colors.color(item.changePct))
-                .frame(width: 54, height: 22)
+                .frame(width: UIScale.pt(54), height: 22)
             VStack(alignment: .trailing, spacing: 1) {
                 Text(Fmt.price(item.price, currency: item.ccy)).monospacedDigit()
-                Text(Fmt.pct(item.changePct)).font(.caption).monospacedDigit()
+                Text(Fmt.pct(item.changePct)).font(.s(.caption)).monospacedDigit()
                     .foregroundStyle(colors.color(item.changePct))
             }
-            .frame(minWidth: 70, alignment: .trailing)
+            .frame(minWidth: UIScale.pt(70), alignment: .trailing)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// ≡ grip shown at the left of each row; the whole row is draggable, this makes it discoverable.
+struct DragHandle: View {
+    @State private var hover = false
+
+    var body: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.s(.callout))
+            .foregroundStyle(hover ? Color.secondary : Color.secondary.opacity(0.45))
+            .frame(width: 14)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                hover = inside
+                if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
+            }
+            .help("드래그해서 순서 바꾸기")
     }
 }
 
@@ -209,7 +234,7 @@ struct Badge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .medium))
+            .font(.system(size: UIScale.pt(9), weight: .medium))
             .padding(.horizontal, 4).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
     }
@@ -241,10 +266,10 @@ struct SymbolDetailView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(rangeTitle).font(.headline)
+                            Text(rangeTitle).font(.s(.headline))
                             if base > 0 {
                                 Text("\(Fmt.amount(change, currency: item.ccy, signed: true)) (\(Fmt.pct(change / base)))")
-                                    .font(.caption.monospacedDigit()).foregroundStyle(c.color(change))
+                                    .font(.s(.caption).monospacedDigit()).foregroundStyle(c.color(change))
                             }
                         }
                         Spacer()
@@ -253,10 +278,11 @@ struct SymbolDetailView: View {
                         Picker("", selection: $range) {
                             ForEach(Self.ranges, id: \.self) { Text($0).tag($0) }
                         }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 380)
+                        .pickerStyle(.segmented).labelsHidden().frame(width: UIScale.pt(380))
                     }
                     chartView(pts, base: base, color: c.color(change) == .secondary ? .accentColor : c.color(change))
                         .frame(height: 320)
+                        .padding(.top, HoverTag.reserve)
                     stats(pts, last: last, base: base)
                 }
                 .card()
@@ -324,18 +350,18 @@ struct SymbolDetailView: View {
         return HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(item.displayName).font(.title2.weight(.semibold))
+                    Text(item.displayName).font(.s(.title2).weight(.semibold))
                     Button { Task { await model.setStar(item.symbol, !item.starred) } } label: {
                         Image(systemName: item.starred ? "star.fill" : "star")
                             .foregroundStyle(item.starred ? Color.yellow : Color.secondary)
-                            .font(.title3)
+                            .font(.s(.title3))
                     }
                     .buttonStyle(.plain)
                 }
                 HStack(spacing: 6) {
-                    Text(item.symbol).font(.callout.weight(.medium))
+                    Text(item.symbol).font(.s(.callout).weight(.medium))
                     if let en = item.englishName, en != item.displayName {
-                        Text(en).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                        Text(en).font(.s(.callout)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     if item.isETF { Badge("ETF", .purple) }
                     if let ex = item.exchange { Badge(ex, .gray) }
@@ -344,15 +370,15 @@ struct SymbolDetailView: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(Fmt.price(last, currency: item.ccy))
-                    .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .font(.system(size: UIScale.pt(28), weight: .semibold, design: .rounded)).monospacedDigit()
                     .contentTransition(.numericText()).animation(.default, value: last)
                 HStack(spacing: 6) {
                     Text("오늘").foregroundStyle(.secondary)
                     Text("\(Fmt.amount(item.change ?? 0, currency: item.ccy, signed: true)) (\(Fmt.pct(item.changePct)))")
                         .foregroundStyle(c.color(item.changePct))
                 }
-                .font(.callout.monospacedDigit())
-                Text("실시간 · \(Fmt.relative(item.priceTime))").font(.caption2).foregroundStyle(.tertiary)
+                .font(.s(.callout).monospacedDigit())
+                Text("실시간 · \(Fmt.relative(item.priceTime))").font(.s(.caption2)).foregroundStyle(.tertiary)
             }
         }
     }
@@ -386,7 +412,7 @@ struct SymbolDetailView: View {
                         .foregroundStyle(.secondary.opacity(0.6))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                         .annotation(position: .bottom, alignment: .leading) {
-                            Text("전일 종가 \(Fmt.price(pc, currency: item.ccy))").font(.caption2).foregroundStyle(.secondary)
+                            Text("전일 종가 \(Fmt.price(pc, currency: item.ccy))").font(.s(.caption2)).foregroundStyle(.secondary)
                         }
                 }
                 if let avg = item.held?.avgCost {
@@ -394,12 +420,12 @@ struct SymbolDetailView: View {
                         .foregroundStyle(Color.orange.opacity(0.8))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 3]))
                         .annotation(position: .top, alignment: .leading) {
-                            Text("내 평단 \(Fmt.price(avg, currency: item.ccy))").font(.caption2).foregroundStyle(.orange)
+                            Text("내 평단 \(Fmt.price(avg, currency: item.ccy))").font(.s(.caption2)).foregroundStyle(.orange)
                         }
                 }
                 if let sel = selected, let p = nearest(pts, sel) {
                     RuleMark(x: .value("t", p.t)).foregroundStyle(.secondary.opacity(0.4))
-                        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                             HoverTag(
                                 title: p.t.formatted(date: .abbreviated, time: intraday ? .shortened : .omitted),
                                 value: Fmt.price(p.price, currency: item.ccy),
@@ -458,9 +484,9 @@ struct SymbolDetailView: View {
 
     private func stat(_ title: String, _ value: String, _ sub: String?, color: Color = .primary, subColor: Color = .secondary) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.callout.weight(.medium)).monospacedDigit().foregroundStyle(color)
-            if let sub { Text(sub).font(.caption2).monospacedDigit().foregroundStyle(subColor) }
+            Text(title).font(.s(.caption)).foregroundStyle(.secondary)
+            Text(value).font(.s(.callout).weight(.medium)).monospacedDigit().foregroundStyle(color)
+            if let sub { Text(sub).font(.s(.caption2)).monospacedDigit().foregroundStyle(subColor) }
         }
     }
 

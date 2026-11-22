@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,7 @@ from .connectors.ibkr import FlexConnector, GatewayConnector
 from .connectors.toss import TossClient, TossConnector
 from .demo import Demo
 from .fxcost import KRWCost
+from .history import TOSS_TYPES, normalize_toss
 from .models import BrokerSnapshot, Quote
 from .store import Store
 from .watchlist import Watchlist
@@ -198,7 +200,48 @@ class Engine:
             ]
             pts.sort(key=lambda p: p["t"])
         intraday = intraday or bool(rows)
+        self._add_invested(pts)
         return {"range": rng, "intraday": intraday, "points": pts}
+
+    def _add_invested(self, pts: list[dict]) -> None:
+        """Net money put into stocks as of each point (buys − sells at fill price), so the app can
+        chart 투자수익 = 평가금액 − 순투입액 without the jumps from new deposits. Includes realized gains."""
+        fx = self.fx_to_usd()
+        dates: list[str] = []
+        cum: list[float] = []
+        flows = self.store.trade_flows()
+        # Shares held before the first recorded trade (current − Σ trades) have no buy in the
+        # records; count them as invested at their first known fill price.
+        held: dict[tuple[str, str], float] = {}
+        for s in self.broker_snapshots():
+            for leg in s.legs:
+                held[(leg.symbol, leg.currency)] = held.get((leg.symbol, leg.currency), 0.0) + leg.quantity
+        net: dict[tuple[str, str], float] = {}
+        first_px: dict[tuple[str, str], float] = {}
+        for sym, ccy, qty, px in self.store.trade_symbols():
+            net[(sym, ccy)] = net.get((sym, ccy), 0.0) + qty
+            if px is not None:
+                first_px.setdefault((sym, ccy), px)
+        total = 0.0
+        for key in set(held) | set(net):
+            opening = held.get(key, 0.0) - net.get(key, 0.0)
+            if opening > 1e-9 and key in first_px and key[1] in fx:
+                total += opening * first_px[key] * fx[key[1]]
+        for d, ccy, qty, px in flows:
+            if px is None or ccy not in fx:  # splits / transfers move no money
+                continue
+            total += qty * px * fx[ccy]
+            if dates and dates[-1] == d:
+                cum[-1] = total
+            else:
+                dates.append(d)
+                cum.append(total)
+        if not dates:
+            return
+        for p in pts:
+            d = datetime.fromisoformat(p["t"]).astimezone(NY).date().isoformat()
+            i = bisect_right(dates, d) - 1
+            p["investedUSD"] = round(cum[i], 2) if i >= 0 else 0.0
 
     def watchlist_view(self) -> dict:
         held: dict[str, dict] = {}
@@ -404,6 +447,13 @@ class Engine:
         while True:
             t = self.toss
             if t:
+                try:  # keep recent trades fresh for the 투자수익 chart
+                    since = datetime.now(NY).date() - timedelta(days=10)
+                    trades = normalize_toss(await t.client.transactions(TOSS_TYPES, since=since))
+                    if trades:
+                        self.store.save_trades(trades)
+                except Exception as e:  # noqa: BLE001
+                    log.info("trade refresh failed: %r", e)
                 await self.watchlist.ensure_universe(t.client)
                 start = datetime.now(NY).date() - timedelta(days=45)
                 for sym in list(self.watchlist.symbols()):

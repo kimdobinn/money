@@ -104,6 +104,8 @@ struct HistoryPoint: Codable, Identifiable, Equatable {
     var t: Date
     var valueUSD: Double?
     var costUSD: Double?
+    /// Net money put into stocks so far (buys − sells); 투자수익 = valueUSD − investedUSD.
+    var investedUSD: Double?
     var id: Date { t }
 }
 

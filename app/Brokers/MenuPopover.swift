@@ -17,7 +17,7 @@ struct MenuPopover: View {
             Divider()
             footer
         }
-        .frame(width: 360)
+        .frame(width: UIScale.pt(360))
     }
 
     @ViewBuilder
@@ -27,14 +27,14 @@ struct MenuPopover: View {
         VStack(alignment: .leading, spacing: 14) {
             if p.demo { DemoBanner(compact: true) }
             HStack(alignment: .firstTextBaseline) {
-                Text("총자산").font(.subheadline).foregroundStyle(.secondary)
+                Text("총자산").font(.s(.subheadline)).foregroundStyle(.secondary)
                 Spacer()
                 CurrencyPicker(selection: p.displayCurrency) { model.setDisplayCurrency($0) }
-                    .frame(width: 150)
+                    .frame(width: UIScale.pt(150))
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(m.full(p.totals.netWorthUSD))
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .font(.system(size: UIScale.pt(30), weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .contentTransition(.numericText())
                     .animation(.default, value: p.totals.netWorthUSD)
@@ -46,9 +46,10 @@ struct MenuPopover: View {
                     Text("총 \(m.full(p.totals.unrealizedPLUSD, signed: true)) (\(Fmt.pct(p.totals.unrealizedPLPct)))")
                         .foregroundStyle(c.color(p.totals.unrealizedPLUSD))
                 }
-                .font(.callout.monospacedDigit())
+                .font(.s(.callout).monospacedDigit())
             }
 
+            GoalMiniBar(portfolio: p)
             BrokerSplitBar(brokers: p.brokers, money: m)
             if let k = p.brokers.first(where: { $0.id == "toss" })?.krw {
                 HStack(spacing: 6) {
@@ -58,7 +59,7 @@ struct MenuPopover: View {
                     Text("· 환율 \(Fmt.amount(k.fxPLKRW, currency: "KRW", signed: true))")
                         .foregroundStyle(.secondary)
                 }
-                .font(.caption.monospacedDigit())
+                .font(.s(.caption).monospacedDigit())
             }
 
             VStack(spacing: 6) {
@@ -66,7 +67,7 @@ struct MenuPopover: View {
                     MiniPositionRow(pos: pos, money: m, colors: c)
                 }
                 if p.positions.count > 8 {
-                    Text("외 \(p.positions.count - 8)종목").font(.caption).foregroundStyle(.secondary)
+                    Text("외 \(p.positions.count - 8)종목").font(.s(.caption)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -74,7 +75,7 @@ struct MenuPopover: View {
             let starred = (model.watchlist?.items ?? []).filter(\.starred)
             if !starred.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("즐겨찾기", systemImage: "star.fill").font(.caption.weight(.semibold))
+                    Label("즐겨찾기", systemImage: "star.fill").font(.s(.caption).weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(starred) { it in
                         Button {
@@ -124,19 +125,19 @@ struct MiniPositionRow: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(pos.symbol).font(.callout.weight(.semibold))
+                    Text(pos.symbol).font(.s(.callout).weight(.semibold))
                     ForEach(pos.legs, id: \.broker) { leg in
                         Circle().fill(BrokerStyle.color(leg.broker)).frame(width: 5, height: 5)
                     }
                 }
                 Text("\(Fmt.qty(pos.quantity))주 · 평단 \(Fmt.price(pos.avgCost, currency: pos.currency))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.s(.caption)).foregroundStyle(.secondary)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 1) {
-                Text(money.full(pos.marketValueUSD ?? 0)).font(.callout.monospacedDigit())
+                Text(money.full(pos.marketValueUSD ?? 0)).font(.s(.callout).monospacedDigit())
                 Text(Fmt.arrowPct(pos.dayChangePct))
-                    .font(.caption.monospacedDigit())
+                    .font(.s(.caption).monospacedDigit())
                     .foregroundStyle(colors.color(pos.dayChangePct))
             }
         }
@@ -149,15 +150,15 @@ struct MiniWatchRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(item.symbol).font(.callout.weight(.semibold))
-            Text(item.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(item.symbol).font(.s(.callout).weight(.semibold))
+            Text(item.displayName).font(.s(.caption)).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
             Sparkline(values: item.spark + (item.price.map { [$0] } ?? []), color: colors.color(item.changePct))
-                .frame(width: 44, height: 16)
-            Text(Fmt.price(item.price, currency: item.ccy)).font(.callout.monospacedDigit())
-            Text(Fmt.arrowPct(item.changePct)).font(.caption.monospacedDigit())
+                .frame(width: UIScale.pt(44), height: 16)
+            Text(Fmt.price(item.price, currency: item.ccy)).font(.s(.callout).monospacedDigit())
+            Text(Fmt.arrowPct(item.changePct)).font(.s(.caption).monospacedDigit())
                 .foregroundStyle(colors.color(item.changePct))
-                .frame(width: 62, alignment: .trailing)
+                .frame(width: UIScale.pt(62), alignment: .trailing)
         }
     }
 }
@@ -183,11 +184,11 @@ struct BrokerSplitBar: View {
                 ForEach(brokers) { b in
                     HStack(spacing: 5) {
                         Circle().fill(BrokerStyle.color(b.id)).frame(width: 7, height: 7)
-                        Text(b.name).font(.caption)
+                        Text(b.name).font(.s(.caption))
                         Text(money.compact(b.marketValueUSD + b.cashUSD))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .font(.s(.caption).monospacedDigit()).foregroundStyle(.secondary)
                         Text(String(format: "%.0f%%", (b.marketValueUSD + b.cashUSD) / total * 100))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                            .font(.s(.caption).monospacedDigit()).foregroundStyle(.tertiary)
                     }
                 }
             }
@@ -213,7 +214,7 @@ struct StatusDots: View {
                 }
             }
         }
-        .font(.caption)
+        .font(.s(.caption))
         .foregroundStyle(.secondary)
     }
 
@@ -272,7 +273,7 @@ struct DemoBanner: View {
             }
             .controlSize(.small)
         }
-        .font(.caption)
+        .font(.s(.caption))
         .padding(8)
         .background(.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
     }
@@ -282,11 +283,11 @@ struct HelperDownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("헬퍼(brokerd)가 실행 중이 아니에요", systemImage: "exclamationmark.triangle.fill")
-                .font(.headline).foregroundStyle(.orange)
+                .font(.s(.headline)).foregroundStyle(.orange)
             Text("데이터를 모으는 백그라운드 헬퍼에 연결할 수 없습니다. 터미널에서 아래 명령으로 설치·재시작하세요.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.s(.callout)).foregroundStyle(.secondary)
             Text("~/Brokers/helper/install.sh")
-                .font(.system(.callout, design: .monospaced))
+                .font(.s(.callout).monospaced())
                 .textSelection(.enabled)
                 .padding(6)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))

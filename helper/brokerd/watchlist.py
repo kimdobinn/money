@@ -49,7 +49,7 @@ class Watchlist:
     def entries(self) -> list[dict]:
         rows = self.store._x(
             "SELECT symbol, name, english_name, exchange, security_type, currency, starred, added_at "
-            "FROM watchlist ORDER BY starred DESC, added_at"
+            "FROM watchlist ORDER BY starred DESC, COALESCE(position, 1e9), added_at"
         )
         return [
             {
@@ -75,8 +75,8 @@ class Watchlist:
         it = info[0]
         sym = norm_symbol(it["symbol"])
         self.store._x(
-            "INSERT INTO watchlist(symbol, name, english_name, exchange, security_type, currency, starred, added_at) "
-            "VALUES(?,?,?,?,?,?,0,?) ON CONFLICT(symbol) DO UPDATE SET name=excluded.name, "
+            "INSERT INTO watchlist(symbol, name, english_name, exchange, security_type, currency, starred, added_at, position) "
+            "VALUES(?,?,?,?,?,?,0,?,(SELECT COALESCE(MAX(position), -1) + 1 FROM watchlist)) ON CONFLICT(symbol) DO UPDATE SET name=excluded.name, "
             "english_name=excluded.english_name, exchange=excluded.exchange, "
             "security_type=excluded.security_type, currency=excluded.currency",
             (sym, it.get("name"), it.get("englishName"), it.get("market"), it.get("securityType"),
@@ -93,6 +93,15 @@ class Watchlist:
 
     def remove(self, symbol: str):
         self.store._x("DELETE FROM watchlist WHERE symbol=?", (norm_symbol(symbol),))
+
+    def set_order(self, symbols: list[str]):
+        """Persist the user's drag-and-drop order (full list, top to bottom)."""
+        with self.store.lock:
+            self.store.db.executemany(
+                "UPDATE watchlist SET position=? WHERE symbol=?",
+                [(i, norm_symbol(s)) for i, s in enumerate(symbols)],
+            )
+            self.store.db.commit()
 
     def set_starred(self, symbol: str, starred: bool):
         self.store._x("UPDATE watchlist SET starred=? WHERE symbol=?", (int(starred), norm_symbol(symbol)))
