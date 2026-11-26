@@ -17,7 +17,7 @@ IBKR Flex  ─┼─▶ brokerd ──HTTP─┼─ 대시보드 창 (차트 · 
 
 ```bash
 ~/Brokers/helper/install.sh     # 헬퍼 설치·재시작
-~/Brokers/app/build.sh          # 앱 빌드 → /Applications/Brokers.app 설치·실행
+~/Brokers/app/build.sh          # 앱 빌드 → /Applications/money.app 설치·실행
 ```
 
 앱은 로그인 시 자동 실행됩니다(설정 > 표시에서 끌 수 있음). Spotlight로 Brokers를 다시 실행하면 대시보드가 열립니다.

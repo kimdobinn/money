@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from bisect import bisect_right
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,16 +14,34 @@ import httpx
 
 from . import aggregate, keychain
 from .config import Settings
+from .cloud import CloudSync
 from .connectors.ibkr import FlexConnector, GatewayConnector
+from .connectors import ibkr_web
+from .connectors.ibkr_web import WebApiConnector
 from .connectors.toss import TossClient, TossConnector
 from .demo import Demo
 from .fxcost import KRWCost
 from .history import TOSS_TYPES, normalize_toss
-from .models import BrokerSnapshot, Quote
+from .models import BrokerSnapshot, Leg, Quote
 from .store import Store
 from .watchlist import Watchlist
 
 log = logging.getLogger("brokerd.engine")
+
+
+def _dump_snapshot(s: BrokerSnapshot) -> dict:
+    d = asdict(s)
+    d["as_of"] = s.as_of.isoformat() if s.as_of else None
+    d.pop("cached", None)
+    d.pop("busy", None)
+    return d
+
+
+def _load_snapshot(d: dict) -> BrokerSnapshot:
+    d = dict(d)
+    d["legs"] = [Leg(**l) for l in d.get("legs") or []]
+    d["as_of"] = datetime.fromisoformat(d["as_of"]) if d.get("as_of") else None
+    return BrokerSnapshot(**d)
 NY = ZoneInfo("America/New_York")
 
 
@@ -33,9 +53,13 @@ class Engine:
         self.toss: TossConnector | None = None
         self.gateway: GatewayConnector | None = None
         self.flex: FlexConnector | None = None
+        # IBKR Web API (Client Portal Gateway): works where IB Gateway's port 4001 is blocked
+        self.webapi: WebApiConnector | None = WebApiConnector() if ibkr_web.available() else None
         self.quotes: dict[str, Quote] = {}
         self._prev_cache: dict[tuple[str, str], float | None] = {}
         self.fx_fallback: dict[str, float] = {}
+        self._snap_saved: dict[str, float] = {}
+        self._snap_cache: dict[str, BrokerSnapshot | None] = {}
         self.public_ip: str | None = None
         self.backfill_state = {"running": False, "lastRun": None, "message": None}
         self.krw_cost = KRWCost(self.store)
@@ -48,6 +72,7 @@ class Engine:
         self._flex_kick = asyncio.Event()
         self._holdings_kick = asyncio.Event()
         self._quote_kick = asyncio.Event()
+        self.cloud = CloudSync(self)
 
     # ---- lifecycle ---------------------------------------------------------
     async def start(self) -> None:
@@ -61,6 +86,8 @@ class Engine:
             self._ip_loop(),
             self._auto_backfill(),
             self._watch_loop(),
+            self.cloud.run(),
+            *([self.webapi.run()] if self.webapi else []),
         ):
             self._tasks.append(asyncio.create_task(coro))
 
@@ -108,24 +135,45 @@ class Engine:
             return True
         if mode == "off":
             return False
-        gw_live = bool(self.gateway and self.gateway.connected)
+        gw_live = bool((self.gateway and self.gateway.connected) or (self.webapi and self.webapi.connected))
         return not (self.toss or self.flex or gw_live)
 
     def _ibkr_snapshot(self) -> BrokerSnapshot | None:
         gw = self.gateway.snapshot() if self.gateway else None
+        if not gw and self.webapi:
+            gw = self.webapi.snapshot()
         if gw:
+            if gw.legs and time.time() - self._snap_saved.get("ibkr:gateway", 0) > 60:
+                self.store.meta_set("snap:ibkr:gateway", json.dumps(_dump_snapshot(gw)))
+                self._snap_saved["ibkr:gateway"] = time.time()
+                self._snap_cache.pop("ibkr:gateway", None)
             return gw
         fl = self.flex.snapshot() if self.flex else None
+        # Gateway went away: keep its last numbers unless the Flex report is newer. Flex is dated by
+        # report day (00:00 UTC) but covers that whole trading day, so count it as of the next day.
+        live = self.gateway or self.webapi
+        last = self._cached("ibkr:gateway") if live else None
+        if last and last.as_of and (not fl or not fl.as_of or last.as_of > fl.as_of + timedelta(days=1)):
+            when = last.as_of.astimezone().strftime("%-m/%-d %H:%M")
+            msg = f"실시간 연결 끊김 — 마지막 연결({when}) 기준 포지션을 표시 중입니다"
+            if (m := self._ibkr_live_message()):
+                msg += " · " + m
+            return replace(last, status="stale", cached=True, legs=[replace(l) for l in last.legs], message=msg)
         if fl:
-            if self.gateway:
-                fl.message = "Gateway 미연결 — 최근 Flex 리포트(전일 기준) 포지션을 표시 중입니다"
+            if live:
+                fl.message = "실시간 연결 끊김 — 최근 Flex 리포트(전일 기준) 포지션을 표시 중입니다"
             if self.flex.message:
                 fl.message = (fl.message + " · " if fl.message else "") + self.flex.message
             return fl
-        if self.gateway or self.flex:
-            msg = (self.gateway.message if self.gateway else None) or (self.flex.message if self.flex else None)
-            return BrokerSnapshot("ibkr", "IBKR", "error" if not self.gateway else "connecting", "", None, message=msg)
+        if live or self.flex:
+            msg = self._ibkr_live_message() or (self.flex.message if self.flex else None)
+            return BrokerSnapshot("ibkr", "IBKR", "error" if not live else "connecting", "", None, message=msg)
         return None
+
+    def _ibkr_live_message(self) -> str | None:
+        if self.webapi and not self.webapi.connected:
+            return self.webapi.message
+        return self.gateway.message if self.gateway else None
 
     def broker_snapshots(self) -> list[BrokerSnapshot]:
         if self.is_demo():
@@ -136,7 +184,35 @@ class Engine:
         ib = self._ibkr_snapshot()
         if ib:
             out.append(ib)
+        out = [self._with_cache(s) for s in out]
+        if self.flex and self.flex.fetching:
+            out = [replace(s, busy="Flex 리포트 받는 중") if s.broker == "ibkr" else s for s in out]
         return out
+
+    # ---- last-known holdings -------------------------------------------------
+    def _with_cache(self, s: BrokerSnapshot) -> BrokerSnapshot:
+        """Persist each broker's last good holdings; when a broker can't be reached
+        (startup, IP block, Gateway off), show those holdings instead of nothing."""
+        if s.legs or s.cash:
+            if s.status in ("ok", "stale") and time.time() - self._snap_saved.get(s.broker, 0) > 60:
+                self.store.meta_set(f"snap:{s.broker}", json.dumps(_dump_snapshot(s)))
+                self._snap_saved[s.broker] = time.time()
+                self._snap_cache.pop(s.broker, None)
+            return s
+        c = self._cached(s.broker)
+        if not c:
+            return s
+        # message = why the live connection failed; the app shows "Last fetched …" from as_of
+        return replace(c, status="stale", cached=True, legs=[replace(l) for l in c.legs], message=s.message)
+
+    def _cached(self, key: str) -> BrokerSnapshot | None:
+        if key not in self._snap_cache:
+            raw = self.store.meta_get(f"snap:{key}")
+            try:
+                self._snap_cache[key] = _load_snapshot(json.loads(raw)) if raw else None
+            except (ValueError, TypeError):
+                self._snap_cache[key] = None
+        return self._snap_cache[key]
 
     def fx_to_usd(self) -> dict[str, float]:
         fx = {"USD": 1.0}
@@ -179,9 +255,17 @@ class Engine:
         # then one point per day. Buckets keep long ranges light.
         bucket = {"1D": 300, "1W": 900, "1M": 3600, "3M": 3 * 3600, "YTD": 12 * 3600, "1Y": 12 * 3600}.get(rng)
         since_ts = int(time.time()) - days * 86400
+        # Live rows recorded before the most recently added broker joined only hold part of the
+        # portfolio; the backfill (which now includes that broker) covers that time instead.
+        joined = max(
+            (int(v) for s in self.broker_snapshots()
+             if (v := self.store.meta_get(f"first_seen:{s.broker}")) and v.isdigit()),
+            default=0,
+        )
+        joined_day = datetime.fromtimestamp(joined, NY).date().isoformat() if joined else ""
         dense: dict[int, tuple[int, float, float | None]] = {}
         if bucket:
-            for ts, v, c in self.store.snapshots_since(since_ts):
+            for ts, v, c in self.store.snapshots_since(max(since_ts, joined)):
                 dense[ts // bucket] = (ts, v, c)
             for ts, v in self.store.hourly_since(since_ts):
                 dense.setdefault(ts // bucket, (ts, v, None))
@@ -195,8 +279,8 @@ class Engine:
             since = (now.date() - timedelta(days=days)).isoformat()
             pts += [
                 {"t": f"{d}T21:00:00+00:00", "valueUSD": v, "costUSD": c}
-                for d, v, c in self.store.daily_since(since)
-                if d not in covered
+                for d, v, c, src in self.store.daily_since(since)
+                if d not in covered and not (src == "live" and d < joined_day)
             ]
             pts.sort(key=lambda p: p["t"])
         intraday = intraday or bool(rows)
@@ -210,23 +294,36 @@ class Engine:
         dates: list[str] = []
         cum: list[float] = []
         flows = self.store.trade_flows()
-        # Shares held before the first recorded trade (current − Σ trades) have no buy in the
-        # records; count them as invested at their first known fill price.
-        held: dict[tuple[str, str], float] = {}
-        for s in self.broker_snapshots():
-            for leg in s.legs:
-                held[(leg.symbol, leg.currency)] = held.get((leg.symbol, leg.currency), 0.0) + leg.quantity
+        rows = self.store.trade_symbols()
+        trade_brokers = {r[0] for r in rows}
         net: dict[tuple[str, str], float] = {}
         first_px: dict[tuple[str, str], float] = {}
-        for sym, ccy, qty, px in self.store.trade_symbols():
+        for _, sym, ccy, qty, px in rows:
             net[(sym, ccy)] = net.get((sym, ccy), 0.0) + qty
             if px is not None:
                 first_px.setdefault((sym, ccy), px)
+        held: dict[tuple[str, str], float] = {}
+        avg: dict[tuple[str, str], float] = {}
+        late: list[tuple[int, float]] = []  # (from date, USD) for brokers without trade history
+        for s in self.broker_snapshots():
+            if s.broker in trade_brokers:
+                for leg in s.legs:
+                    k = (leg.symbol, leg.currency)
+                    held[k] = held.get(k, 0.0) + leg.quantity
+                    avg.setdefault(k, leg.avg_cost)
+            elif s.legs:
+                # no trades on record: its holdings count as invested (at avg cost) from the day
+                # the app first saw them, matching when they start showing up in the value series
+                since = int(self.store.meta_get(f"first_seen:{s.broker}") or time.time())
+                late.append((since, sum(l.quantity * l.avg_cost * fx.get(l.currency, 0.0) for l in s.legs)))
+        # Shares held before the first recorded trade (current − Σ trades) have no buy in the
+        # records; count them as invested at their first known fill price (else avg cost).
         total = 0.0
         for key in set(held) | set(net):
             opening = held.get(key, 0.0) - net.get(key, 0.0)
-            if opening > 1e-9 and key in first_px and key[1] in fx:
-                total += opening * first_px[key] * fx[key[1]]
+            px = first_px.get(key, avg.get(key))
+            if opening > 1e-9 and px and key[1] in fx:
+                total += opening * px * fx[key[1]]
         for d, ccy, qty, px in flows:
             if px is None or ccy not in fx:  # splits / transfers move no money
                 continue
@@ -236,12 +333,15 @@ class Engine:
             else:
                 dates.append(d)
                 cum.append(total)
-        if not dates:
+        if not dates and not late:
             return
         for p in pts:
-            d = datetime.fromisoformat(p["t"]).astimezone(NY).date().isoformat()
+            t = datetime.fromisoformat(p["t"])
+            d = t.astimezone(NY).date().isoformat()
             i = bisect_right(dates, d) - 1
-            p["investedUSD"] = round(cum[i], 2) if i >= 0 else 0.0
+            v = cum[i] if i >= 0 else 0.0
+            v += sum(amt for since, amt in late if t.timestamp() >= since)
+            p["investedUSD"] = round(v, 2)
 
     def watchlist_view(self) -> dict:
         held: dict[str, dict] = {}
@@ -295,6 +395,13 @@ class Engine:
                     "connected": bool(self.gateway and self.gateway.connected),
                     "message": self.gateway.message if self.gateway else None,
                 },
+                "webapi": {
+                    "available": bool(self.webapi),
+                    "running": bool(self.webapi and self.webapi.running),
+                    "connected": bool(self.webapi and self.webapi.connected),
+                    "message": self.webapi.message if self.webapi else None,
+                    "loginUrl": ibkr_web.LOGIN_URL,
+                },
                 "flex": {
                     "configured": bool(self.flex),
                     "fetchedAt": self.flex.fetched_at.isoformat() if self.flex and self.flex.fetched_at else None,
@@ -302,6 +409,7 @@ class Engine:
                 },
             },
             "backfill": self.backfill_state,
+            "cloud": self.cloud.state,
         }
 
     # ---- loops -------------------------------------------------------------
@@ -385,27 +493,39 @@ class Engine:
             await asyncio.sleep(60)
 
     async def _flex_loop(self):
+        await asyncio.sleep(20)
         while True:
-            await self._sleep_or_kick(3600, self._flex_kick)
             f = self.flex
             if not f:
+                await self._sleep_or_kick(3600, self._flex_kick)
                 continue
             stale = not f.fetched_at or datetime.now(timezone.utc) - f.fetched_at > timedelta(hours=6)
             if stale:
+                f.fetching = True
                 try:
                     await f.fetch()
                 except Exception as e:  # noqa: BLE001
                     f.message = f"Flex 리포트 실패: {e}"
                     log.warning("flex fetch failed: %s", e)
+                finally:
+                    f.fetching = False
+            await self._sleep_or_kick(3600, self._flex_kick)
 
     async def _snapshot_loop(self):
         await asyncio.sleep(60)
         while True:
             try:
                 if not self.is_demo():
-                    # ignore brokers that never delivered data (e.g. IB Gateway not logged in)
-                    snaps = [s for s in self.broker_snapshots() if s.legs or s.status in ("ok", "stale")]
-                    if snaps and all(s.status in ("ok", "stale") for s in snaps):
+                    # Skip brokers that never delivered data (e.g. IB Gateway never logged in), but
+                    # don't record while one that did is down — a partial total would look like a crash.
+                    snaps = [
+                        s for s in self.broker_snapshots()
+                        if s.legs or s.status in ("ok", "stale") or self.store.meta_get(f"first_seen:{s.broker}")
+                    ]
+                    if snaps and all(s.status in ("ok", "stale") and (s.legs or s.cash) and not s.cached for s in snaps):
+                        for s in snaps:
+                            if not self.store.meta_get(f"first_seen:{s.broker}"):
+                                self.store.meta_set(f"first_seen:{s.broker}", str(int(time.time())))
                         p = self.portfolio()["totals"]
                         if p["marketValueUSD"] > 0:
                             self.store.add_snapshot(
@@ -416,17 +536,65 @@ class Engine:
                 log.warning("snapshot failed: %s", e)
             await asyncio.sleep(300)
 
+    async def _check_ip(self) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=6) as http:
+                ip = (await http.get("https://api.ipify.org")).text.strip()
+            if self.public_ip and ip != self.public_ip:
+                log.warning("public IP changed %s -> %s", self.public_ip, ip)
+                self._holdings_kick.set()
+            self.public_ip = ip
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def retry(self, broker: str, quick: bool = False) -> dict:
+        """User-triggered reconnect for one broker (e.g. after switching Wi-Fi).
+        quick: only poke the Gateway (used while waiting for the user to log in)."""
+        if not quick:
+            await self._check_ip()
+        if broker == "toss":
+            t = self.toss
+            if not t:
+                return {"ok": False, "message": "토스 API가 설정되지 않았습니다"}
+            t._cash_at = 0.0
+            await t.refresh_holdings()
+            await t.refresh_fx()
+            self._quote_kick.set()
+            ok = t.snapshot.status == "ok"
+            msg = "토스 연결됨" if ok else (t.snapshot.message or "토스 연결 실패")
+            if not ok and self.public_ip:
+                msg += f" (현재 IP {self.public_ip})"
+            return {"ok": ok, "message": msg}
+        if broker == "ibkr":
+            if not (self.gateway or self.flex or self.webapi):
+                return {"ok": False, "message": "IBKR이 설정되지 않았습니다"}
+            parts, ok = [], False
+            if self.flex and not quick:
+                self.flex.fetched_at = None
+                self._flex_kick.set()
+            if self.webapi and self.webapi.running:
+                self.webapi.wake()
+                for _ in range(8):
+                    await asyncio.sleep(0.5)
+                    if self.webapi.connected:
+                        break
+                if self.webapi.connected:
+                    ok = True
+                    parts.append("IBKR 웹 연결됨")
+            if self.gateway and not ok:
+                ok = await self.gateway.retry(wait=4 if quick else 15)
+                parts.append("IB Gateway 연결됨" if ok else (self.gateway.message or "IB Gateway 연결 실패"))
+            if self.flex and not quick:
+                self.flex.fetching = True  # show the spinner right away; the loop picks it up
+                if not self.gateway:
+                    ok, parts = True, ["Flex 리포트 다시 받는 중"]
+            self._quote_kick.set()
+            return {"ok": ok, "message": " · ".join(parts)}
+        return {"ok": False, "message": f"알 수 없는 증권사: {broker}"}
+
     async def _ip_loop(self):
         while True:
-            try:
-                async with httpx.AsyncClient(timeout=10) as http:
-                    ip = (await http.get("https://api.ipify.org")).text.strip()
-                if self.public_ip and ip != self.public_ip:
-                    log.warning("public IP changed %s -> %s", self.public_ip, ip)
-                    self._holdings_kick.set()
-                self.public_ip = ip
-            except Exception:  # noqa: BLE001
-                pass
+            await self._check_ip()
             await asyncio.sleep(600)
 
     async def _auto_backfill(self):
@@ -437,9 +605,12 @@ class Engine:
             if self.is_demo():
                 continue
             live = ",".join(sorted(s.broker for s in self.broker_snapshots() if s.status in ("ok", "stale")))
+            if live and self.flex and self.flex.trades():
+                live += "+flex"  # re-run once IBKR trade history arrives
             if live and live != self.store.meta_get("backfill_brokers"):
                 await self.run_backfill()
-                self.store.meta_set("backfill_brokers", live)
+                if self.backfill_state.get("ok"):
+                    self.store.meta_set("backfill_brokers", live)
 
     async def _watch_loop(self):
         """Daily symbol-universe refresh + keep watchlist sparklines warm."""
@@ -472,10 +643,10 @@ class Engine:
         try:
             msg = await backfill(self)
             self.store.meta_set("backfill_done", datetime.now(timezone.utc).isoformat())
-            self.backfill_state.update(message=msg)
+            self.backfill_state.update(message=msg, ok=True)
         except Exception as e:  # noqa: BLE001
             log.exception("backfill failed")
-            self.backfill_state.update(message=f"히스토리 복원 실패: {e}")
+            self.backfill_state.update(message=f"히스토리 복원 실패: {e}", ok=False)
         finally:
             self.backfill_state.update(running=False, lastRun=datetime.now(timezone.utc).isoformat())
         return self.backfill_state

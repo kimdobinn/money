@@ -30,6 +30,8 @@ class BrokerSnapshot:
     cash: dict[str, float] = field(default_factory=dict)  # currency -> amount
     message: str | None = None
     fx_to_usd: dict[str, float] = field(default_factory=dict)  # 1 unit ccy = x USD
+    cached: bool = False  # restored from the last good snapshot on disk
+    busy: str | None = None  # background work in progress, e.g. "Flex 리포트 받는 중"
 
 
 @dataclass

@@ -56,6 +56,7 @@ struct HoldingsCard: View {
     let money: Money
     @State private var sortOrder = [KeyPathComparator(\HoldingRow.sortValue, order: .reverse)]
     @State private var search = ""
+    @State private var expanded: Set<String> = []
 
     var body: some View {
         let rows = positions
@@ -65,11 +66,11 @@ struct HoldingsCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("보유 종목").font(.s(.headline))
-                Text("두 증권사 합산 · ▸ 를 눌러 증권사별·원화 평단 보기").font(.s(.caption)).foregroundStyle(.secondary)
+                Text("두 증권사 합산 · 행을 눌러 증권사별·원화 평단 보기").font(.s(.caption)).foregroundStyle(.secondary)
                 Spacer()
                 TextField("종목 검색", text: $search).textFieldStyle(.roundedBorder).frame(width: UIScale.pt(180))
             }
-            Table(rows, children: \.children, sortOrder: $sortOrder) {
+            Table(of: HoldingRow.self, sortOrder: $sortOrder) {
                 TableColumn("종목", value: \.symbol) { r in
                     HStack(spacing: 6) {
                         if r.isLeg {
@@ -96,25 +97,27 @@ struct HoldingsCard: View {
                             }
                         }
                     }
+                    .cell { toggle(r) }
                 }
                 .width(min: UIScale.pt(150), ideal: UIScale.pt(200))
-                TableColumn("수량") { r in num(Fmt.qty(r.quantity)) }.width(UIScale.pt(70))
-                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)) }.width(UIScale.pt(90))
-                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)) }.width(UIScale.pt(90))
+                TableColumn("수량") { r in num(Fmt.qty(r.quantity)).cell { toggle(r) } }.width(UIScale.pt(70))
+                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)).cell { toggle(r) } }.width(UIScale.pt(90))
+                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)).cell { toggle(r) } }.width(UIScale.pt(90))
                 TableColumn("오늘", value: \.sortDay) { r in
-                    num(r.isLeg ? "" : Fmt.pct(r.dayChangePct)).foregroundStyle(colors.color(r.dayChangePct))
+                    num(r.isLeg ? "" : Fmt.pct(r.dayChangePct)).foregroundStyle(colors.color(r.dayChangePct)).cell { toggle(r) }
                 }.width(UIScale.pt(75))
                 TableColumn("평가금액", value: \.sortValue) { r in
-                    num(r.marketValue.map { Fmt.amount($0, currency: r.currency) } ?? "—")
+                    num(r.marketValue.map { Fmt.amount($0, currency: r.currency) } ?? "—").cell { toggle(r) }
                 }.width(UIScale.pt(110))
                 TableColumn("손익", value: \.sortPL) { r in
                     num(r.unrealizedPL.map { Fmt.amount($0, currency: r.currency, signed: true) } ?? "—")
-                        .foregroundStyle(colors.color(r.unrealizedPL))
+                        .foregroundStyle(colors.color(r.unrealizedPL)).cell { toggle(r) }
                 }.width(UIScale.pt(105))
                 TableColumn("수익률", value: \.sortPLPct) { r in
-                    num(Fmt.pct(r.unrealizedPLPct)).foregroundStyle(colors.color(r.unrealizedPLPct))
+                    num(Fmt.pct(r.unrealizedPLPct)).foregroundStyle(colors.color(r.unrealizedPLPct)).cell { toggle(r) }
                 }.width(UIScale.pt(80))
                 TableColumn("비중", value: \.sortWeight) { r in
+                    Group {
                     if let w = r.weight {
                         HStack(spacing: 6) {
                             GeometryReader { g in
@@ -127,7 +130,21 @@ struct HoldingsCard: View {
                             Text(Fmt.pct(w, signed: false)).font(.s(.caption).monospacedDigit()).frame(width: UIScale.pt(46), alignment: .trailing)
                         }
                     }
+                    }
+                    .cell { toggle(r) }
                 }.width(min: UIScale.pt(100), ideal: UIScale.pt(120))
+            } rows: {
+                ForEach(rows) { r in
+                    if let kids = r.children {
+                        DisclosureTableRow(r, isExpanded: Binding(
+                            get: { expanded.contains(r.id) },
+                            set: { if $0 { expanded.insert(r.id) } else { expanded.remove(r.id) } })) {
+                            ForEach(kids) { TableRow($0) }
+                        }
+                    } else {
+                        TableRow(r)
+                    }
+                }
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
             .frame(minHeight: CGFloat(min(14, max(4, rows.count + 1))) * UIScale.pt(34) + 30)
@@ -135,7 +152,24 @@ struct HoldingsCard: View {
         .card()
     }
 
+    /// Click anywhere on a stock row to open/close its broker breakdown (no row selection, so no blue flash).
+    private func toggle(_ r: HoldingRow) {
+        guard !r.isLeg, r.children != nil else { return }
+        withAnimation(.smooth(duration: 0.25)) {
+            if expanded.contains(r.id) { expanded.remove(r.id) } else { expanded.insert(r.id) }
+        }
+    }
+
     private func num(_ s: String) -> Text {
         Text(s).monospacedDigit()
+    }
+}
+
+private extension View {
+    /// Fills the whole table cell so a click anywhere in it registers, not just on the text.
+    func cell(_ tap: @escaping () -> Void) -> some View {
+        frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: tap)
     }
 }

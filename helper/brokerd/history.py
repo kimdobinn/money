@@ -151,7 +151,10 @@ async def backfill(engine) -> str:
 
     all_trades = engine.store.all_trades()  # (broker, symbol, ccy, qty, date)
     current: dict[tuple[str, str], float] = defaultdict(float)
+    trade_brokers = {t[0] for t in all_trades}
     for s in engine.broker_snapshots():
+        if s.broker not in trade_brokers:
+            continue  # no trade history (e.g. IBKR without Flex): don't project its holdings into the past
         for leg in s.legs:
             current[(leg.symbol, leg.currency)] += leg.quantity
 

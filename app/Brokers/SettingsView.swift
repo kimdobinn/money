@@ -9,6 +9,7 @@ struct SettingsView: View {
             AccountsTab().tabItem { Label("계정 연결", systemImage: "link") }
             DisplayTab().tabItem { Label("표시", systemImage: "paintbrush") }
             HistoryTab().tabItem { Label("히스토리", systemImage: "clock.arrow.circlepath") }
+            CloudTab().tabItem { Label("동기화", systemImage: "icloud") }
         }
         .frame(width: 620)
         .padding(.vertical, 8)

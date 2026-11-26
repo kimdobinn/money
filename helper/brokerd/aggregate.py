@@ -120,6 +120,8 @@ def build(
                 "source": s.source,
                 "asOf": s.as_of.isoformat() if s.as_of else None,
                 "message": s.message,
+                "busy": s.busy,
+                "cached": s.cached,
                 "marketValueUSD": round(broker_mv[s.broker], 2),
                 "costBasisUSD": round(broker_cost[s.broker], 2),
                 "dayPLUSD": round(broker_day[s.broker], 2),

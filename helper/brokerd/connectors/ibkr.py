@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -41,6 +42,38 @@ class GatewayConnector:
         self.host, self.port, self.client_id = host, port, client_id
         self.message: str | None = "IB Gateway 연결 대기 중"
         self._stop = False
+        self._wake = asyncio.Event()
+        self._attempts = 0
+
+    async def _nap(self, seconds: float) -> bool:
+        """Sleep, but return early (True) when retry() wakes us."""
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout=seconds)
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            self._wake.clear()
+
+    async def retry(self, wait: float = 15) -> bool:
+        """Drop the current session and reconnect now (e.g. after switching networks).
+        Returns True once account data has arrived again."""
+        if self.ib.isConnected():
+            try:
+                self.ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        self.message = "IB Gateway 다시 연결 중…"
+        start = self._attempts
+        self._wake.set()
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            await asyncio.sleep(0.5)
+            if self.snapshot():
+                return True
+            if self._attempts > start and not self.ib.isConnected():
+                return False  # connect attempt failed — no point waiting longer
+        return False
 
     @property
     def connected(self) -> bool:
@@ -59,20 +92,24 @@ class GatewayConnector:
                     self.message = None
                     backoff = 5
                     log.info("IB Gateway connected %s:%s", self.host, self.port)
+                    self._attempts += 1
                 except Exception as e:  # noqa: BLE001
                     self.message = (
                         "IB Gateway에 연결할 수 없습니다 — Gateway가 실행·로그인 상태인지, "
                         f"API 포트({self.port})가 열려 있는지 확인하세요"
                     )
                     log.info("gateway connect failed: %s", e)
+                    self._attempts += 1
                     try:
                         self.ib.disconnect()
                     except Exception:  # noqa: BLE001
                         pass
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 60)
+                    if await self._nap(backoff):
+                        backoff = 5
+                    else:
+                        backoff = min(backoff * 2, 60)
                     continue
-            await asyncio.sleep(5)
+            await self._nap(5)
 
     def stop(self):
         self._stop = True
@@ -104,9 +141,13 @@ class GatewayConnector:
         cash: dict[str, float] = {}
         rate_to_base: dict[str, float] = {}
         for v in self.ib.accountValues():
-            if v.tag == "CashBalance" and v.currency not in ("BASE", ""):
-                cash[v.currency] = cash.get(v.currency, 0.0) + (_f(v.value) or 0.0)
-            elif v.tag == "ExchangeRate" and v.currency not in ("BASE", ""):
+            # some accounts report per-currency ledger rows as "$LEDGER-CashBalance" etc.
+            tag = v.tag.removeprefix("$LEDGER-")
+            if v.currency in ("BASE", ""):
+                continue
+            if tag == "CashBalance":
+                cash[v.currency] = _f(v.value) or 0.0  # same row may arrive with and without prefix
+            elif tag == "ExchangeRate":
                 r = _f(v.value)
                 if r:
                     rate_to_base[v.currency] = r
@@ -153,6 +194,7 @@ class FlexConnector:
         self.token, self.query_id = token, query_id
         self.xml: ET.Element | None = None
         self.message: str | None = None
+        self.fetching = False
         self.fetched_at: datetime | None = None
         self._load_cache()
 
@@ -174,7 +216,15 @@ class FlexConnector:
             url = root.findtext("Url") or f"{FLEX_BASE}/GetStatement"
             for _ in range(20):
                 await asyncio.sleep(5)
-                r = await http.get(url, params={"t": self.token, "q": ref, "v": 3})
+                try:
+                    r = await http.get(url, params={"t": self.token, "q": ref, "v": 3})
+                except httpx.ConnectError:
+                    if url == f"{FLEX_BASE}/GetStatement":
+                        raise
+                    # the returned host (e.g. gdcdyn.…) may not resolve on some networks
+                    log.info("flex url %s unreachable; using %s", url, FLEX_BASE)
+                    url = f"{FLEX_BASE}/GetStatement"
+                    r = await http.get(url, params={"t": self.token, "q": ref, "v": 3})
                 if b"<FlexQueryResponse" in r.content[:500]:
                     FLEX_CACHE_PATH.write_bytes(r.content)
                     self.xml = ET.fromstring(r.content)

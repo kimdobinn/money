@@ -7,8 +7,10 @@ struct DashboardView: View {
 
     var body: some View {
         Group {
-            if tab == "watch" && model.helperReachable {
+            if tab == "watch" && (model.helperReachable || model.cloudMode) {
                 WatchlistView()
+            } else if tab == "chat" && model.helperReachable {
+                ChatView()
             } else if let p = model.portfolio {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -34,6 +36,7 @@ struct DashboardView: View {
                 TabSwitcher(selection: $tab, tabs: [
                     ("portfolio", "포트폴리오", "chart.pie.fill", "1"),
                     ("watch", "관심 종목", "star.fill", "2"),
+                    ("chat", "어시스턴트", "bubble.left.and.text.bubble.right.fill", "3"),
                 ])
             }
             ToolbarItem(placement: .primaryAction) {
@@ -57,8 +60,12 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("포트폴리오").font(.s(.title2).weight(.semibold))
                 HStack(spacing: 10) {
-                    StatusDots(brokers: p.brokers, reachable: model.helperReachable)
-                    Text("· 업데이트 \(Fmt.relative(model.lastUpdate))").font(.s(.caption)).foregroundStyle(.secondary)
+                    StatusDots(brokers: p.brokers, reachable: model.helperReachable || model.cloudMode)
+                    if model.cloudMode {
+                        CloudSyncLabel().font(.s(.caption))
+                    } else {
+                        Text("· 업데이트 \(Fmt.relative(model.lastUpdate))").font(.s(.caption)).foregroundStyle(.secondary)
+                    }
                     if let usdsgd = p.fx.USDSGD, let usdkrw = p.fx.USDKRW {
                         Text(String(format: "· USD/SGD %.4f · USD/KRW %.1f", usdsgd, usdkrw))
                             .font(.s(.caption).monospacedDigit()).foregroundStyle(.secondary)
@@ -451,6 +458,7 @@ struct AllocationCard: View {
 // MARK: - Brokers
 
 struct BrokersCard: View {
+    @EnvironmentObject var model: AppModel
     let brokers: [Broker]
     let money: Money
     let colors: PLColors
@@ -465,6 +473,12 @@ struct BrokersCard: View {
                         Circle().fill(BrokerStyle.color(b.id)).frame(width: 9, height: 9)
                         Text(b.name).font(.s(.callout).weight(.semibold))
                         SourceBadge(broker: b)
+                        if !model.cloudMode {
+                            RetryButton(broker: b)
+                            if b.id == "ibkr" && !b.isLive && b.source != "demo" {
+                                GatewayLaunchButton()
+                            }
+                        }
                         Spacer()
                         Text(money.full(b.marketValueUSD + b.cashUSD)).font(.s(.callout).monospacedDigit().weight(.medium))
                     }
@@ -477,7 +491,23 @@ struct BrokersCard: View {
                     if let k = b.krw {
                         KRWBreakdown(k: k, colors: colors)
                     }
-                    if let msg = b.message {
+                    if let busy = b.busy {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 12, height: 12)
+                            Text(busy + "…")
+                        }
+                        .font(.s(.caption)).foregroundStyle(.secondary)
+                    }
+                    if let r = model.retryResult[b.id] {
+                        Label(r.message, systemImage: r.ok ? "checkmark.circle" : "xmark.circle")
+                            .font(.s(.caption)).foregroundStyle(r.ok ? .green : .red)
+                    } else if b.cached == true {
+                        TimelineView(.periodic(from: .now, by: 30)) { _ in
+                            Label("Last fetched \(Fmt.stamp(b.asOf)) · \(Fmt.relative(b.asOf))", systemImage: "clock")
+                                .font(.s(.caption)).foregroundStyle(.secondary)
+                        }
+                        .help(b.message.map { "연결 안 됨: \($0)" } ?? "연결 안 됨 — 마지막으로 받은 보유내역을 표시 중")
+                    } else if let msg = b.message {
                         Label(msg, systemImage: "info.circle").font(.s(.caption)).foregroundStyle(.orange)
                     }
                 }
@@ -534,12 +564,67 @@ struct KRWBreakdown: View {
     }
 }
 
+/// 증권사 하나만 지금 다시 연결.
+struct RetryButton: View {
+    @EnvironmentObject var model: AppModel
+    let broker: Broker
+
+    var body: some View {
+        let busy = model.retrying.contains(broker.id)
+        Button { Task { await model.retry(broker.id) } } label: {
+            HStack(spacing: 4) {
+                if busy {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                Text(busy ? "연결 중…" : "다시 연결")
+            }
+            .font(.s(.caption2))
+        }
+        .buttonStyle(.borderless)
+        .disabled(busy || broker.source == "demo")
+        .help("\(broker.name)에 지금 다시 연결하고 보유내역을 새로 받아와요 (와이파이 ↔ 핫스팟 전환 후 등)")
+    }
+}
+
+/// IBKR live connection: web login (Client Portal Gateway, works on any network) when installed,
+/// otherwise open the IB Gateway app. Login itself always stays with the user.
+struct GatewayLaunchButton: View {
+    @EnvironmentObject var model: AppModel
+    var compact = false
+
+    var body: some View {
+        let web = model.status?.connectors.webapi?.available == true
+        Button { Task { web ? await model.ibkrWebLogin() : await model.launchGateway() } } label: {
+            HStack(spacing: 4) {
+                if model.gatewayLaunching {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: web ? "person.badge.key" : "power")
+                }
+                if !compact { Text(model.gatewayLaunching ? "로그인 대기 중…" : (web ? "IBKR 로그인" : "Gateway 켜기")) }
+            }
+            .font(.s(.caption2))
+        }
+        .buttonStyle(.borderless)
+        .disabled(model.gatewayLaunching)
+        .help(web
+              ? "브라우저에서 IBKR에 로그인하면 실시간으로 연결돼요 — 학교 와이파이에서도 돼요 (최대 5분 대기)"
+              : "IB Gateway 앱을 열어요. 로그인하면 자동으로 연결돼요 (최대 3분 대기)")
+        .contextMenu {
+            if web { Button("IB Gateway 앱으로 연결") { Task { await model.launchGateway() } } }
+        }
+    }
+}
+
 struct SourceBadge: View {
     let broker: Broker
     var body: some View {
         let (text, color): (String, Color) = {
+            if broker.cached == true { return ("연결 안 됨", .orange) }
             switch broker.source {
-            case "api", "gateway": return ("실시간", .green)
+            case "api", "gateway", "webapi": return ("실시간", .green)
             case "flex": return ("전일 기준", .yellow)
             case "demo": return ("데모", .gray)
             default: return (broker.status == "error" ? "오류" : "연결 중", broker.status == "error" ? .red : .gray)

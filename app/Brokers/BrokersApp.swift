@@ -29,7 +29,7 @@ struct BrokersApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Brokers", id: "dashboard") {
+        Window("money", id: "dashboard") {
             DashboardView()
                 .environmentObject(model)
                 .scaledFonts()
@@ -74,7 +74,7 @@ struct MenuBarLabel: View {
             default: Text("\(total) \(day)")
             }
         } else {
-            Image(systemName: model.helperReachable ? "chart.line.uptrend.xyaxis" : "exclamationmark.triangle")
+            Image(systemName: model.helperReachable || model.cloud != nil ? "chart.line.uptrend.xyaxis" : "exclamationmark.triangle")
         }
     }
 }

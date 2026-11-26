@@ -21,7 +21,7 @@ targets:
     info:
       path: Brokers/Info.plist
       properties:
-        CFBundleDisplayName: Brokers
+        CFBundleDisplayName: money
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.finance
         NSAppTransportSecurity:
@@ -33,6 +33,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dobinkim.brokers
+        PRODUCT_NAME: money
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: BrokersWidget
@@ -43,7 +44,7 @@ targets:
     info:
       path: BrokersWidget/Info.plist
       properties:
-        CFBundleDisplayName: Brokers
+        CFBundleDisplayName: money
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         NSAppTransportSecurity:

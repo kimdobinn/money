@@ -96,7 +96,8 @@ struct MenuPopover: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            StatusDots(brokers: model.portfolio?.brokers ?? [], reachable: model.helperReachable)
+            StatusDots(brokers: model.portfolio?.brokers ?? [], reachable: model.helperReachable || model.cloudMode)
+            if model.cloudMode { CloudSyncLabel(short: true).font(.s(.caption)) }
             Spacer()
             Button {
                 openWindow(id: "dashboard")
@@ -197,6 +198,7 @@ struct BrokerSplitBar: View {
 }
 
 struct StatusDots: View {
+    @EnvironmentObject var model: AppModel
     let brokers: [Broker]
     let reachable: Bool
 
@@ -206,16 +208,47 @@ struct StatusDots: View {
                 Label("헬퍼 꺼짐", systemImage: "circle.fill").foregroundStyle(.red)
             } else {
                 ForEach(brokers) { b in
-                    HStack(spacing: 4) {
-                        Circle().fill(Self.color(b.status)).frame(width: 7, height: 7)
-                        Text(BrokerStyle.short(b.id))
+                    dot(b)
+                    if b.id == "ibkr" && !b.isLive && b.source != "demo" && !model.cloudMode {
+                        GatewayLaunchButton(compact: true)
                     }
-                    .help(Self.describe(b))
                 }
             }
         }
         .font(.s(.caption))
         .foregroundStyle(.secondary)
+    }
+
+    private func dot(_ b: Broker) -> some View {
+        Button { Task { await model.retry(b.id) } } label: {
+            HStack(spacing: 4) {
+                indicator(b)
+                Text(BrokerStyle.short(b.id))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(b.source == "demo" || model.cloudMode)
+        .help(tip(b))
+    }
+
+    @ViewBuilder
+    private func indicator(_ b: Broker) -> some View {
+        if model.retrying.contains(b.id) || b.busy != nil {
+            ProgressView().controlSize(.mini).frame(width: 7, height: 7)
+        } else if let r = model.retryResult[b.id] {
+            Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(r.ok ? Color.green : Color.red)
+        } else {
+            Circle().fill(Self.color(b.status)).frame(width: 7, height: 7)
+        }
+    }
+
+    private func tip(_ b: Broker) -> String {
+        var s = Self.describe(b)
+        if let r = model.retryResult[b.id] { s += "\n\n" + r.message }
+        return s + "\n\n클릭하면 지금 다시 연결해요"
     }
 
     static func color(_ status: String) -> Color {
@@ -232,11 +265,15 @@ struct StatusDots: View {
         switch b.source {
         case "api": src = "토스 Open API (실시간)"
         case "gateway": src = "IB Gateway (실시간)"
+        case "webapi": src = "IBKR 웹 API (실시간)"
         case "flex": src = "Flex 리포트 (전일 기준)"
         case "demo": src = "데모 데이터"
         default: src = b.source
         }
         var s = "\(b.name): \(src) · \(Fmt.relative(b.asOf))"
+        if b.cached == true {
+            s = "\(b.name): 연결 안 됨\nLast fetched \(Fmt.stamp(b.asOf)) · \(Fmt.relative(b.asOf))"
+        }
         if let m = b.message { s += "\n\(m)" }
         return s
     }
@@ -280,8 +317,15 @@ struct DemoBanner: View {
 }
 
 struct HelperDownView: View {
+    @EnvironmentObject var model: AppModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if model.cloud != nil || CloudConfig.shared != nil {
+                CloudViewerPrompt()
+                Divider().padding(.vertical, 6)
+                Text("이 Mac에서 직접 데이터를 모으려면").font(.s(.subheadline).weight(.semibold))
+            }
             Label("헬퍼(brokerd)가 실행 중이 아니에요", systemImage: "exclamationmark.triangle.fill")
                 .font(.s(.headline)).foregroundStyle(.orange)
             Text("데이터를 모으는 백그라운드 헬퍼에 연결할 수 없습니다. 터미널에서 아래 명령으로 설치·재시작하세요.")

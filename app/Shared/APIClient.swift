@@ -36,7 +36,10 @@ struct APIClient {
 
     @discardableResult
     func write<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> T {
-        var req = URLRequest(url: Self.base.appendingPathComponent(path))
+        let parts = path.split(separator: "?", maxSplits: 1).map(String.init)
+        var comps = URLComponents(url: Self.base.appendingPathComponent(parts[0]), resolvingAgainstBaseURL: false)!
+        if parts.count > 1 { comps.percentEncodedQuery = parts[1] }
+        var req = URLRequest(url: comps.url!)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let tok = Self.writeToken() { req.setValue(tok, forHTTPHeaderField: "X-Brokers-Token") }

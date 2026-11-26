@@ -111,6 +111,14 @@ enum Fmt {
         return nf.string(from: NSNumber(value: v)) ?? "\(v)"
     }
 
+    /// "11/23 14:07"
+    static func stamp(_ d: Date?) -> String {
+        guard let d else { return "—" }
+        let f = DateFormatter()
+        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "M/d HH:mm"
+        return (Calendar.current.isDateInToday(d) ? "오늘 " : "") + f.string(from: d)
+    }
+
     static func relative(_ d: Date?) -> String {
         guard let d else { return "—" }
         let f = RelativeDateTimeFormatter()

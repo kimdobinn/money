@@ -3,3 +3,4 @@ helper/.venv/
 __pycache__/
 app/build/
 app/Brokers.xcodeproj/
+app/Brokers/cloud-config.json

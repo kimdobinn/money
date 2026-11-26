@@ -30,6 +30,11 @@ struct Totals: Codable, Equatable {
     var netWorthUSD: Double
 }
 
+struct RetryResult: Codable, Equatable {
+    var ok: Bool
+    var message: String
+}
+
 struct Broker: Codable, Identifiable, Equatable {
     var id: String
     var name: String
@@ -37,6 +42,8 @@ struct Broker: Codable, Identifiable, Equatable {
     var source: String
     var asOf: Date?
     var message: String?
+    var busy: String?
+    var cached: Bool?
     var marketValueUSD: Double
     var costBasisUSD: Double
     var dayPLUSD: Double
@@ -44,6 +51,11 @@ struct Broker: Codable, Identifiable, Equatable {
     var cashUSD: Double
     var positions: Int
     var krw: KRWSummary?
+}
+
+extension Broker {
+    /// Live IBKR/Toss connection right now (not last-known numbers kept while disconnected).
+    var isLive: Bool { ["api", "gateway", "webapi"].contains(source) && cached != true }
 }
 
 /// 원화 기준 손익 (토스): 매수 당시 환율로 산 원금 vs 현재 환율 평가.
@@ -109,6 +121,14 @@ struct HistoryPoint: Codable, Identifiable, Equatable {
     var id: Date { t }
 }
 
+/// Firestore upload state of this Mac's helper (helper/brokerd/cloud.py).
+struct CloudState: Codable, Equatable {
+    var signedIn: Bool
+    var email: String?
+    var lastSync: Date?
+    var error: String?
+}
+
 struct HelperStatus: Codable, Equatable {
     struct Settings: Codable, Equatable {
         struct Toss: Codable, Equatable { var enabled: Bool }
@@ -144,9 +164,17 @@ struct HelperStatus: Codable, Equatable {
             var fetchedAt: Date?
             var message: String?
         }
+        struct WebAPI: Codable, Equatable {
+            var available: Bool
+            var running: Bool
+            var connected: Bool
+            var message: String?
+            var loginUrl: String
+        }
         var toss: Toss
         var gateway: Gateway
         var flex: Flex
+        var webapi: WebAPI?
     }
     struct Backfill: Codable, Equatable {
         var running: Bool
@@ -159,6 +187,7 @@ struct HelperStatus: Codable, Equatable {
     var settings: Settings
     var connectors: Connectors
     var backfill: Backfill
+    var cloud: CloudState?
 }
 
 enum ISODate {
