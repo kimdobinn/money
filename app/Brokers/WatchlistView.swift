@@ -27,6 +27,7 @@ struct WatchlistView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear(perform: selectFirstIfNeeded)
+        .task { await model.relayKeepAlive() }
         .onChange(of: model.watchlist?.items.map(\.symbol)) { selectFirstIfNeeded() }
     }
 

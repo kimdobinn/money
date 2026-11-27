@@ -248,8 +248,19 @@ final class AppModel: ObservableObject {
     }
 
     func chart(_ symbol: String, range: String) async throws -> PriceChart {
-        if cloudMode { throw APIError.http(0, "보기 전용 Mac에서는 차트를 불러올 수 없어요") }
+        if cloudMode {
+            guard let s = cloud else { throw RelayError("Google 계정으로 로그인해야 차트를 볼 수 있어요") }
+            return try await RemoteRelay.chart(s, symbol: symbol, range: range)
+        }
         return try await api.get("v1/chart", query: ["symbol": symbol, "range": range])
+    }
+
+    /// Viewer Mac: keep the helper Mac polling fast while the watchlist is open, so charts load quickly.
+    func relayKeepAlive() async {
+        while !Task.isCancelled {
+            if cloudMode, let s = cloud { await RemoteRelay.presence(s) }
+            try? await Task.sleep(for: .seconds(60))
+        }
     }
 
     func loadStatus() async {

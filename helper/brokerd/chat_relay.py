@@ -7,6 +7,7 @@ documents under users/{uid}/ (same security rules as cloud.py):
   chatConv/{cid}        one conversation's messages (JSON), uploaded when it changes
   chatReq/presence      viewer heartbeat {until: epoch}; while fresh we poll fast (1.5 s), else every 15 s
   chatReq/{reqId}       viewer → helper: {op: send|cancel|delete|memory_delete, ...}; deleted once taken
+  relayResp/{reqId}     helper → viewer: one-shot answers (op "chart": watchlist price chart)
   chatResp/{reqId}      helper → viewer: the reply as it streams {status, text, tools, conversationId, title,
                         error}; flushed ~every 0.7 s; the viewer deletes it when done
 
@@ -115,6 +116,8 @@ class ChatRelay:
             op = f.get("op")
             if op == "send" and rid not in self._tasks:
                 self._tasks[rid] = asyncio.create_task(self._answer(http, s, rid, f))
+            elif op == "chart":
+                asyncio.create_task(self._chart(http, s, rid, f))
             elif op == "cancel":
                 if (t := self._tasks.get(f.get("target") or "")):
                     t.cancel()
@@ -124,6 +127,20 @@ class ChatRelay:
             elif op == "memory_delete" and f.get("memoryId") is not None:
                 self.store.memory_delete(int(f["memoryId"]))
                 await self._sync(http, s)
+
+    async def _chart(self, http, s, rid: str, f: dict) -> None:
+        try:
+            if not self.engine.toss:
+                raise RuntimeError("토스 계정이 연결돼 있지 않아요")
+            data = await self.engine.watchlist.chart(self.engine.toss.client, str(f.get("symbol") or ""),
+                                                     str(f.get("range") or "1Y").upper())
+            out = {"status": "done", "data": _dumps(data)}
+        except Exception as e:  # noqa: BLE001
+            out = {"status": "error", "error": f"차트를 불러오지 못했어요: {e}"[:300]}
+        try:
+            await self._put(http, s, f"relayResp/{rid}", out)
+        except Exception as e:  # noqa: BLE001
+            log.info("chart reply failed: %r", e)
 
     async def _answer(self, http, s, rid: str, f: dict) -> None:
         st = {"status": "streaming", "text": "", "tools": [], "conversationId": "", "title": "", "error": ""}

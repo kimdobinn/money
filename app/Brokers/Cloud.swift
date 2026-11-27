@@ -159,6 +159,47 @@ actor CloudClient {
     func reset() { token = nil }
 }
 
+/// One-shot requests to the helper Mac through Firestore (see helper/brokerd/chat_relay.py).
+struct RelayError: LocalizedError {
+    let errorDescription: String?
+    init(_ m: String) { errorDescription = m }
+}
+
+enum RemoteRelay {
+    private static var lastPresence = Date.distantPast
+    private static var cache: [String: (PriceChart, Date)] = [:]
+
+    /// Tells the helper to poll fast for the next 3 minutes (written at most once a minute).
+    @MainActor static func presence(_ s: CloudSession, force: Bool = false) async {
+        guard force || Date().timeIntervalSince(lastPresence) > 60 else { return }
+        lastPresence = Date()
+        try? await CloudClient.shared.put(s, "chatReq/presence", fields: ["until": Date().timeIntervalSince1970 + 180])
+    }
+
+    @MainActor static func chart(_ s: CloudSession, symbol: String, range: String) async throws -> PriceChart {
+        let key = "\(symbol)|\(range)"
+        let ttl: TimeInterval = range == "1D" ? 25 : 110
+        if let (c, at) = cache[key], Date().timeIntervalSince(at) < ttl { return c }
+        await presence(s)
+        let rid = UUID().uuidString
+        try await CloudClient.shared.put(s, "chatReq/\(rid)", fields: [
+            "op": "chart", "symbol": symbol, "range": range, "created": Date().timeIntervalSince1970,
+        ])
+        let started = Date()
+        while Date().timeIntervalSince(started) < 35 {
+            try await Task.sleep(for: .milliseconds(700))
+            guard let doc = try await CloudClient.shared.get(s, "relayResp/\(rid)") else { continue }
+            try? await CloudClient.shared.delete(s, "relayResp/\(rid)")
+            if doc.string("status") == "error" { throw RelayError(doc.string("error") ?? "차트 오류") }
+            guard let c = doc.decode(PriceChart.self, "data") else { throw RelayError("차트 데이터를 읽지 못했어요") }
+            cache[key] = (c, Date())
+            return c
+        }
+        try? await CloudClient.shared.delete(s, "chatReq/\(rid)")
+        throw RelayError("Mac mini가 응답하지 않아요 — Mac mini가 켜져 있는지 확인해주세요")
+    }
+}
+
 enum FormHTTP {
     static func encode(_ v: [String: String]) -> Data {
         var allowed = CharacterSet.alphanumerics
