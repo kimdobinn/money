@@ -170,6 +170,7 @@ struct ConnectorHeader: View {
 struct DisplayTab: View {
     @EnvironmentObject var model: AppModel
     @AppStorage(UIScale.key) private var fontScale = 1.0
+    @AppStorage(PortfolioLayout.key) private var layout = PortfolioLayout.a.rawValue
 
     var body: some View {
         let s = model.status?.settings
@@ -180,6 +181,14 @@ struct DisplayTab: View {
                 }
             }
             .help("대시보드·메뉴바 창의 글자 크기. 단축키 ⌘+ / ⌘- / ⌘0")
+            Picker(selection: $layout) {
+                ForEach(PortfolioLayout.allCases) { Text($0.title).tag($0.rawValue) }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("포트폴리오 배치")
+                    Text((PortfolioLayout(rawValue: layout) ?? .a).detail).font(.s(.caption)).foregroundStyle(.secondary)
+                }
+            }
             Picker("표시 통화", selection: bind(s?.displayCurrency ?? "SGD", key: "displayCurrency")) {
                 Text("SGD (S$)").tag("SGD"); Text("USD ($)").tag("USD"); Text("KRW (₩)").tag("KRW")
             }
@@ -193,6 +202,7 @@ struct DisplayTab: View {
                 Text("자동 (계정 연결 전까지)").tag("auto"); Text("항상 켜기").tag("on"); Text("끄기").tag("off")
             }
             Toggle("로그인 시 자동 실행", isOn: Binding(get: { model.launchAtLogin }, set: { model.launchAtLogin = $0 }))
+            UpdateSection()
         }
         .formStyle(.grouped)
     }

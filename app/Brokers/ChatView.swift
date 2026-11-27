@@ -171,7 +171,13 @@ struct ChatView: View {
                 composer
             }
         }
-        .task { await chat.load() }
+        .task {
+            await chat.load()
+            // Land on the latest conversation instead of an empty chat.
+            if chat.currentId == nil, let last = chat.conversations.max(by: { $0.updated < $1.updated }) {
+                await chat.open(last.id)
+            }
+        }
         .sheet(isPresented: $showMemory) { MemorySheet(chat: chat) }
     }
 

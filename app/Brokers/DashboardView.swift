@@ -4,6 +4,9 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("dashboardTab") private var tab = "portfolio"
+    @AppStorage(PortfolioLayout.key) private var layout = PortfolioLayout.a.rawValue
+    @State private var tabKeyMonitor: Any?
+    private static let tabOrder = ["portfolio", "watch", "chat"]
 
     var body: some View {
         Group {
@@ -16,13 +19,7 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         if p.demo { DemoBanner() }
                         header(p)
-                        KPIRow(p: p, money: model.money, colors: model.colors)
-                        HistoryCard()
-                        HStack(alignment: .top, spacing: 16) {
-                            AllocationCard(positions: p.positions, money: model.money)
-                            BrokersCard(brokers: p.brokers, money: model.money, colors: model.colors)
-                        }
-                        HoldingsCard(positions: p.positions, colors: model.colors, money: model.money)
+                        PortfolioLayoutView(p: p, layout: layout)
                     }
                     .padding(20)
                 }
@@ -53,6 +50,25 @@ struct DashboardView: View {
             }
         }
         .animation(.default, value: model.toast)
+        .onAppear {
+            // ⌃⇥ / ⌃⇧⇥ cycle 포트폴리오 → 관심 종목 → 어시스턴트 (also while typing in the chat box).
+            tabKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+                let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                guard e.keyCode == 48, mods.contains(.control), !mods.contains(.command), !mods.contains(.option),
+                      e.window?.isKeyWindow == true, e.window?.attachedSheet == nil else { return e }
+                cycleTab(mods.contains(.shift) ? -1 : 1)
+                return nil
+            }
+        }
+        .onDisappear {
+            if let m = tabKeyMonitor { NSEvent.removeMonitor(m); tabKeyMonitor = nil }
+        }
+    }
+
+    private func cycleTab(_ step: Int) {
+        let order = Self.tabOrder
+        let i = order.firstIndex(of: tab) ?? 0
+        withAnimation(.snappy(duration: 0.25)) { tab = order[(i + step + order.count) % order.count] }
     }
 
     private func header(_ p: Portfolio) -> some View {
@@ -73,6 +89,7 @@ struct DashboardView: View {
                 }
             }
             Spacer()
+            UpdatePill().padding(.trailing, 8)
             GoalBadge(portfolio: p)
                 .padding(.trailing, 8)
             CurrencyPicker(selection: p.displayCurrency) { model.setDisplayCurrency($0) }
@@ -81,7 +98,184 @@ struct DashboardView: View {
     }
 }
 
+// MARK: - Layouts
+
+/// Portfolio tab arrangement, chosen in 설정 > 표시.
+enum PortfolioLayout: String, CaseIterable, Identifiable {
+    case a = "A", b = "B", c = "C", d = "D"
+    static let key = "portfolioLayout"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .a: return "A · 보유 종목 먼저"
+        case .b: return "B · 사이드바"
+        case .c: return "C · 탭 전환"
+        case .d: return "D · 컴팩트 상단"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .a: return "요약 숫자 → 보유 종목 → 자산 추이 → 종목 비중·증권사별"
+        case .b: return "왼쪽에 자산 추이·보유 종목, 오른쪽 사이드바에 요약·비중·증권사"
+        case .c: return "요약 숫자 아래에 보유 종목 / 추이 / 구성 중 하나씩 전환"
+        case .d: return "증권사를 상단 한 줄로, 추이·비중을 낮은 한 줄로, 나머지는 보유 종목"
+        }
+    }
+}
+
+struct PortfolioLayoutView: View {
+    @EnvironmentObject var model: AppModel
+    let p: Portfolio
+    let layout: String
+    @AppStorage("portfolioSection") private var section = "holdings"
+
+    var body: some View {
+        let holdings = HoldingsCard(positions: p.positions, colors: model.colors, money: model.money)
+        switch PortfolioLayout(rawValue: layout) ?? .a {
+        case .a:
+            KPIRow(p: p, money: model.money, colors: model.colors)
+            holdings
+            HistoryCard()
+            HStack(alignment: .top, spacing: 16) {
+                AllocationCard(positions: p.positions, money: model.money)
+                BrokersCard(brokers: p.brokers, money: model.money, colors: model.colors)
+            }
+        case .b:
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HistoryCard()
+                    holdings
+                }
+                .frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 16) {
+                    KPISummaryCard(p: p, money: model.money, colors: model.colors)
+                    AllocationCard(positions: p.positions, money: model.money, compact: true)
+                    BrokersCard(brokers: p.brokers, money: model.money, colors: model.colors)
+                }
+                .frame(width: UIScale.pt(330))
+            }
+        case .c:
+            KPIRow(p: p, money: model.money, colors: model.colors)
+            Picker("", selection: $section.animation(.smooth(duration: 0.25))) {
+                Text("보유 종목").tag("holdings")
+                Text("자산 추이").tag("history")
+                Text("구성").tag("mix")
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            switch section {
+            case "history":
+                HistoryCard(chartHeight: 380)
+            case "mix":
+                HStack(alignment: .top, spacing: 16) {
+                    AllocationCard(positions: p.positions, money: model.money)
+                    BrokersCard(brokers: p.brokers, money: model.money, colors: model.colors)
+                }
+            default:
+                holdings
+            }
+        case .d:
+            HStack(alignment: .top, spacing: 12) {
+                let t = p.totals
+                KPICard(title: "총자산", value: model.money.full(t.netWorthUSD), sub: "현금 \(model.money.full(t.cashUSD))", color: .primary, big: true)
+                KPICard(title: "총 손익", value: model.money.full(t.unrealizedPLUSD, signed: true), sub: Fmt.pct(t.unrealizedPLPct), color: model.colors.color(t.unrealizedPLUSD))
+                KPICard(title: "오늘 손익", value: model.money.full(t.dayPLUSD, signed: true), sub: Fmt.pct(t.dayPLPct), color: model.colors.color(t.dayPLUSD))
+                BrokerStripCard(brokers: p.brokers, money: model.money, colors: model.colors)
+                    .frame(minWidth: UIScale.pt(280))
+                    .layoutPriority(1)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 16) {
+                HistoryCard(chartHeight: 170)
+                AllocationCard(positions: p.positions, money: model.money, compact: true, small: true)
+                    .frame(width: UIScale.pt(260))
+            }
+            holdings
+        }
+    }
+}
+
+/// Layout D: each broker on one line (total, today, source), with the reconnect buttons only when needed.
+struct BrokerStripCard: View {
+    @EnvironmentObject var model: AppModel
+    let brokers: [Broker]
+    let money: Money
+    let colors: PLColors
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("증권사별").font(.s(.subheadline)).foregroundStyle(.secondary)
+            ForEach(brokers) { b in
+                HStack(spacing: 6) {
+                    Circle().fill(BrokerStyle.color(b.id)).frame(width: 8, height: 8)
+                    Text(b.name).font(.s(.callout).weight(.semibold)).lineLimit(1)
+                    SourceBadge(broker: b)
+                    if !model.cloudMode && b.id == "ibkr" && !b.isLive && b.source != "demo" {
+                        GatewayLaunchButton().controlSize(.small)
+                    }
+                    Spacer(minLength: 6)
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(money.full(b.marketValueUSD + b.cashUSD)).font(.s(.callout).monospacedDigit().weight(.medium))
+                        Text(money.full(b.dayPLUSD, signed: true)).font(.s(.caption2).monospacedDigit())
+                            .foregroundStyle(colors.color(b.dayPLUSD))
+                    }
+                }
+                .help(b.message ?? "")
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .card()
+    }
+}
+
 // MARK: - KPI
+
+/// Sidebar summary: net worth large, the other four figures in a 2×2 grid.
+struct KPISummaryCard: View {
+    let p: Portfolio
+    let money: Money
+    let colors: PLColors
+
+    var body: some View {
+        let t = p.totals
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("총자산").font(.s(.subheadline)).foregroundStyle(.secondary)
+                Text(money.full(t.netWorthUSD))
+                    .font(.system(size: UIScale.pt(28), weight: .semibold, design: .rounded))
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                    .contentTransition(.numericText())
+                Text("주식 + 현금").font(.s(.caption)).foregroundStyle(.secondary)
+            }
+            Divider()
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow {
+                    cell("주식 평가금액", money.full(t.marketValueUSD), "원금 \(money.full(t.costBasisUSD))", .primary)
+                    cell("현금", money.full(t.cashUSD), "\(Int((t.cashUSD / max(1, t.netWorthUSD)) * 100))% 비중", .primary)
+                }
+                GridRow {
+                    cell("총 손익", money.full(t.unrealizedPLUSD, signed: true), Fmt.pct(t.unrealizedPLPct), colors.color(t.unrealizedPLUSD))
+                    cell("오늘 손익", money.full(t.dayPLUSD, signed: true), Fmt.pct(t.dayPLPct), colors.color(t.dayPLUSD))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    private func cell(_ title: String, _ value: String, _ sub: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.s(.caption)).foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: UIScale.pt(16), weight: .semibold, design: .rounded))
+                .monospacedDigit().foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .contentTransition(.numericText())
+            Text(sub).font(.s(.caption2).monospacedDigit()).foregroundStyle(color == .primary ? .secondary : color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
 struct KPIRow: View {
     let p: Portfolio
@@ -126,6 +320,7 @@ struct KPICard: View {
 // MARK: - History chart
 
 struct HistoryCard: View {
+    var chartHeight: CGFloat = 260
     @EnvironmentObject var model: AppModel
     @State private var selected: Date?
     /// Shared by every value chart: false = zoom to the data range, true = Y axis starts at 0 (scale-correct).
@@ -185,7 +380,7 @@ struct HistoryCard: View {
                     systemImage: "chart.xyaxis.line",
                     description: Text("헬퍼가 5분마다 기록합니다. 과거 거래내역 복원은 설정 > 히스토리에서 실행할 수 있어요.")
                 )
-                .frame(height: 260)
+                .frame(height: chartHeight)
             } else {
                 let values = pts.map { m.convert(y($0, profit)) } + (hasCost ? pts.compactMap { $0.costUSD.map(m.convert) } : [])
                 let vmin = values.min() ?? 0, vmax = values.max() ?? 1
@@ -244,7 +439,7 @@ struct HistoryCard: View {
                 .chartXSelection(value: $selected)
                 .animation(.easeInOut(duration: 0.3), value: zeroBaseline)
                 .animation(.easeInOut(duration: 0.3), value: profit)
-                .frame(height: 260)
+                .frame(height: chartHeight)
                 .padding(.top, HoverTag.reserve)
                 if profit {
                     Text("투자 수익 = 주식 평가금액 − 순투입액(매수 − 매도 금액). 실현손익 포함 · 입금·예수금·배당 제외")
@@ -404,6 +599,8 @@ struct YScaleToggle: View {
 struct AllocationCard: View {
     let positions: [Position]
     let money: Money
+    var compact = false  // sidebar: donut above the legend
+    var small = false    // layout D: shorter donut + legend side by side in a narrow card
     @State private var hover: String?
 
     struct Slice: Identifiable {
@@ -418,7 +615,9 @@ struct AllocationCard: View {
         let slices = top + (rest.isEmpty ? [] : [Slice(id: "기타", value: rest.reduce(0) { $0 + ($1.marketValueUSD ?? 0) }, weight: rest.reduce(0) { $0 + $1.weight })])
         VStack(alignment: .leading, spacing: 12) {
             Text("종목 비중").font(.s(.headline))
-            HStack(spacing: 20) {
+            let layout = compact && !small ? AnyLayout(VStackLayout(spacing: 14)) : AnyLayout(HStackLayout(spacing: small ? 12 : 20))
+            let d: CGFloat = small ? 120 : (compact ? 150 : 170)
+            layout {
                 Chart(slices) { s in
                     SectorMark(angle: .value("v", s.value), innerRadius: .ratio(0.62), angularInset: 1.2)
                         .foregroundStyle(by: .value("종목", s.id))
@@ -426,7 +625,8 @@ struct AllocationCard: View {
                 }
                 .chartLegend(.hidden)
                 .chartForegroundStyleScale(domain: slices.map(\.id), range: Array(Self.palette.prefix(slices.count)))
-                .frame(width: UIScale.pt(170), height: 170)
+                .frame(width: UIScale.pt(d), height: d)
+                .frame(maxWidth: compact && !small ? .infinity : nil)
                 .overlay {
                     VStack(spacing: 2) {
                         Text("\(positions.count)").font(.s(.title2).weight(.semibold))
@@ -439,8 +639,10 @@ struct AllocationCard: View {
                             Circle().fill(Self.palette[i % Self.palette.count]).frame(width: 8, height: 8)
                             Text(s.id).font(.s(.callout).weight(.medium))
                             Spacer()
-                            Text(money.compact(s.value)).font(.s(.callout).monospacedDigit()).foregroundStyle(.secondary)
-                            Text(Fmt.pct(s.weight, signed: false)).font(.s(.callout).monospacedDigit()).frame(width: UIScale.pt(60), alignment: .trailing)
+                            if !small {
+                                Text(money.compact(s.value)).font(.s(.callout).monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                            Text(Fmt.pct(s.weight, signed: false)).font(.s(.callout).monospacedDigit()).frame(width: UIScale.pt(small ? 50 : 60), alignment: .trailing)
                         }
                         .contentShape(Rectangle())
                         .onHover { hover = $0 ? s.id : nil }
@@ -473,20 +675,26 @@ struct BrokersCard: View {
                         Circle().fill(BrokerStyle.color(b.id)).frame(width: 9, height: 9)
                         Text(b.name).font(.s(.callout).weight(.semibold))
                         SourceBadge(broker: b)
-                        if !model.cloudMode {
+                        Spacer()
+                        Text(money.full(b.marketValueUSD + b.cashUSD)).font(.s(.callout).monospacedDigit().weight(.medium))
+                    }
+                    if !model.cloudMode {
+                        HStack(spacing: 10) {
                             RetryButton(broker: b)
                             if b.id == "ibkr" && !b.isLive && b.source != "demo" {
                                 GatewayLaunchButton()
                             }
                         }
-                        Spacer()
-                        Text(money.full(b.marketValueUSD + b.cashUSD)).font(.s(.callout).monospacedDigit().weight(.medium))
                     }
-                    HStack(spacing: 14) {
-                        stat("주식", money.full(b.marketValueUSD))
-                        stat("현금", money.full(b.cashUSD))
-                        stat("손익", money.full(b.marketValueUSD - b.costBasisUSD, signed: true), colors.color(b.marketValueUSD - b.costBasisUSD))
-                        stat("오늘", money.full(b.dayPLUSD, signed: true), colors.color(b.dayPLUSD))
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                        GridRow {
+                            stat("주식", money.full(b.marketValueUSD))
+                            stat("현금", money.full(b.cashUSD))
+                        }
+                        GridRow {
+                            stat("손익", money.full(b.marketValueUSD - b.costBasisUSD, signed: true), colors.color(b.marketValueUSD - b.costBasisUSD))
+                            stat("오늘", money.full(b.dayPLUSD, signed: true), colors.color(b.dayPLUSD))
+                        }
                     }
                     if let k = b.krw {
                         KRWBreakdown(k: k, colors: colors)

@@ -99,23 +99,23 @@ struct HoldingsCard: View {
                     }
                     .cell { toggle(r) }
                 }
-                .width(min: UIScale.pt(150), ideal: UIScale.pt(200))
-                TableColumn("수량") { r in num(Fmt.qty(r.quantity)).cell { toggle(r) } }.width(UIScale.pt(70))
-                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)).cell { toggle(r) } }.width(UIScale.pt(90))
-                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)).cell { toggle(r) } }.width(UIScale.pt(90))
+                .width(min: UIScale.pt(120), ideal: UIScale.pt(190))
+                TableColumn("수량") { r in num(Fmt.qty(r.quantity)).cell { toggle(r) } }.width(min: UIScale.pt(44), ideal: UIScale.pt(60))
+                TableColumn("평단가") { r in num(Fmt.price(r.avgCost, currency: r.currency)).cell { toggle(r) } }.width(min: UIScale.pt(66), ideal: UIScale.pt(84))
+                TableColumn("현재가") { r in num(r.isLeg ? "" : Fmt.price(r.lastPrice, currency: r.currency)).cell { toggle(r) } }.width(min: UIScale.pt(66), ideal: UIScale.pt(84))
                 TableColumn("오늘", value: \.sortDay) { r in
                     num(r.isLeg ? "" : Fmt.pct(r.dayChangePct)).foregroundStyle(colors.color(r.dayChangePct)).cell { toggle(r) }
-                }.width(UIScale.pt(75))
+                }.width(min: UIScale.pt(56), ideal: UIScale.pt(70))
                 TableColumn("평가금액", value: \.sortValue) { r in
                     num(r.marketValue.map { Fmt.amount($0, currency: r.currency) } ?? "—").cell { toggle(r) }
-                }.width(UIScale.pt(110))
+                }.width(min: UIScale.pt(84), ideal: UIScale.pt(104))
                 TableColumn("손익", value: \.sortPL) { r in
                     num(r.unrealizedPL.map { Fmt.amount($0, currency: r.currency, signed: true) } ?? "—")
                         .foregroundStyle(colors.color(r.unrealizedPL)).cell { toggle(r) }
-                }.width(UIScale.pt(105))
+                }.width(min: UIScale.pt(80), ideal: UIScale.pt(98))
                 TableColumn("수익률", value: \.sortPLPct) { r in
                     num(Fmt.pct(r.unrealizedPLPct)).foregroundStyle(colors.color(r.unrealizedPLPct)).cell { toggle(r) }
-                }.width(UIScale.pt(80))
+                }.width(min: UIScale.pt(58), ideal: UIScale.pt(72))
                 TableColumn("비중", value: \.sortWeight) { r in
                     Group {
                     if let w = r.weight {
@@ -132,7 +132,7 @@ struct HoldingsCard: View {
                     }
                     }
                     .cell { toggle(r) }
-                }.width(min: UIScale.pt(100), ideal: UIScale.pt(120))
+                }.width(min: UIScale.pt(80), ideal: UIScale.pt(110))
             } rows: {
                 ForEach(rows) { r in
                     if let kids = r.children {
