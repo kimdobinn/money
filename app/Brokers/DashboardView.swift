@@ -12,8 +12,19 @@ struct DashboardView: View {
         Group {
             if tab == "watch" && (model.helperReachable || model.cloudMode) {
                 WatchlistView()
-            } else if tab == "chat" && model.helperReachable {
-                ChatView()
+            } else if tab == "chat" {
+                if model.helperReachable {
+                    ChatView()
+                } else {
+                    ContentUnavailableView {
+                        Label("어시스턴트는 메인 Mac에서만 쓸 수 있어요", systemImage: "bubble.left.and.text.bubble.right")
+                    } description: {
+                        Text(model.cloudMode
+                             ? "이 Mac은 보기 전용이에요. 어시스턴트는 헬퍼가 실행 중인 Mac(Mac mini)에서 열어 주세요."
+                             : "헬퍼에 연결할 수 없어요. 헬퍼가 실행 중인지 확인해 주세요.")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else if let p = model.portfolio {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
