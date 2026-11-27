@@ -38,7 +38,7 @@ struct BrokersApp: App {
                 .onDisappear { WindowPresence.hideIfNoWindows() }
         }
         .defaultSize(width: 1180, height: 860)
-        .commands { FontScaleCommands() }
+        .commands { FontScaleCommands(); UpdateCommands() }
 
         Settings {
             SettingsView()

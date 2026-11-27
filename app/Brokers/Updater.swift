@@ -183,21 +183,59 @@ struct UpdateSection: View {
     }
 }
 
-/// Small pill shown in the popover footer / dashboard when an update is ready.
+/// Always-visible update button (popover footer, dashboard header): one click checks GitHub and,
+/// if there is a newer version, installs it and relaunches. Highlighted when an update is waiting.
 struct UpdatePill: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject var updater = Updater.shared
 
     var body: some View {
-        if updater.available, let v = updater.latest?.version {
-            Button {
-                Task { await updater.install() }
-            } label: {
-                Label(updater.phase == .downloading || updater.phase == .installing ? "업데이트 중…" : "v\(v) 업데이트",
-                      systemImage: "arrow.down.circle.fill")
+        let busy = [.checking, .downloading, .installing].contains(updater.phase)
+        Button {
+            Task { await Updater.checkAndInstall(flash: model.flash) }
+        } label: {
+            if busy {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 12, height: 12)
+                    Text(updater.phase == .checking ? "확인 중…" : "업데이트 중…")
+                }
+            } else if updater.available, let v = updater.latest?.version {
+                Label("v\(v) 업데이트", systemImage: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+            } else {
+                Image(systemName: "arrow.down.circle")
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(Color.accentColor)
-            .help(updater.latest?.notes ?? "새 버전 설치 후 다시 시작")
+        }
+        .buttonStyle(.borderless)
+        .disabled(busy)
+        .help(updater.available ? (updater.latest?.notes ?? "새 버전 설치 후 다시 시작") : "업데이트 확인 (현재 v\(Updater.current))")
+    }
+}
+
+/// App menu: money > 업데이트 확인…
+struct UpdateCommands: Commands {
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("업데이트 확인…") {
+                Task { @MainActor in
+                    await Updater.checkAndInstall { msg in
+                        let a = NSAlert(); a.messageText = msg; a.runModal()
+                    }
+                }
+            }
+        }
+    }
+}
+
+extension Updater {
+    static func checkAndInstall(flash: @escaping (String) -> Void) async {
+        let u = Updater.shared
+        await u.check()
+        if case .failed(let m) = u.phase { flash(m); return }
+        if u.available {
+            await u.install()
+            if case .failed(let m) = u.phase { flash(m) }
+        } else {
+            flash("최신 버전이에요 (v\(Updater.current))")
         }
     }
 }
