@@ -15,9 +15,23 @@ IBKR Flex  ─┼─▶ brokerd ──HTTP─┼─ 대시보드 창 (차트 · 
 
 ## 설치 / 업데이트
 
+**다른 Mac (보기 전용, 예: MacBook Air)** — 터미널에 한 줄:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kimdobinn/money/main/install.sh | zsh
+```
+
+설치 후 설정 > 동기화에서 같은 Google 계정으로 로그인하면 Mac mini의 데이터가 보입니다.
+새 버전이 나오면 메뉴바·대시보드에 "vX.Y.Z 업데이트" 버튼이 뜨고, 누르면 자동으로 교체·재시작됩니다
+(설정 > 표시 > 앱 업데이트에서도 확인 가능, 6시간마다 자동 확인).
+
+**메인 Mac (헬퍼 실행)**
+
 ```bash
 ~/Brokers/helper/install.sh     # 헬퍼 설치·재시작
-~/Brokers/app/build.sh          # 앱 빌드 → /Applications/money.app 설치·실행
+~/Brokers/app/build.sh          # 앱 빌드 → /Applications/money.app 설치·실행 (로컬 테스트)
+~/Brokers/app/release.sh        # 커밋된 상태로 새 버전 배포 (1.1.0 → 1.1.1, GitHub Release 생성)
+~/Brokers/app/release.sh minor  # 1.1.x → 1.2.0
 ```
 
 앱은 로그인 시 자동 실행됩니다(설정 > 표시에서 끌 수 있음). Spotlight로 Brokers를 다시 실행하면 대시보드가 열립니다.

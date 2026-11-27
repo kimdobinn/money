@@ -99,6 +99,7 @@ struct MenuPopover: View {
             StatusDots(brokers: model.portfolio?.brokers ?? [], reachable: model.helperReachable || model.cloudMode)
             if model.cloudMode { CloudSyncLabel(short: true).font(.s(.caption)) }
             Spacer()
+            UpdatePill()
             Button {
                 openWindow(id: "dashboard")
                 WindowPresence.show()

@@ -25,7 +25,7 @@ struct BrokersApp: App {
         } label: {
             MenuBarLabel()
                 .environmentObject(model)
-                .task { model.start() }
+                .task { model.start(); Updater.shared.start() }
         }
         .menuBarExtraStyle(.window)
 
