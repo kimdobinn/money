@@ -19,6 +19,9 @@ engine = Engine()
 from .chat import Chat  # noqa: E402
 
 chat = Chat(engine)
+from .chat_relay import ChatRelay  # noqa: E402
+
+relay = ChatRelay(engine, chat)
 TOKEN = api_token()
 
 ALLOWED_SETTINGS = {"demoMode", "displayCurrency", "menuBarStyle", "colorStyle", "toss", "ibkr"}
@@ -27,7 +30,9 @@ ALLOWED_SETTINGS = {"demoMode", "displayCurrency", "menuBarStyle", "colorStyle",
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await engine.start()
+    relay_task = asyncio.create_task(relay.run())  # assistant for viewer Macs via Firestore
     yield
+    relay_task.cancel()
     await engine.stop()
 
 

@@ -45,11 +45,14 @@ final class ChatModel: ObservableObject {
     @Published var streamTools: [String] = []
     @Published var error: String?
     @Published var claudeAvailable = true
+    /// Set on a viewer Mac (no helper): chat goes through Firestore to the Mac running the helper.
+    var remote: CloudSession?
 
     private let api = APIClient()
     private var task: Task<Void, Never>?
 
     func load() async {
+        if let r = remote { await loadRemote(r); return }
         struct Convs: Decodable { var conversations: [ChatConversation] }
         struct Status: Decodable { var claude: Bool }
         if let s: Status = try? await api.get("v1/chat/status") { claudeAvailable = s.claude }
@@ -58,6 +61,7 @@ final class ChatModel: ObservableObject {
     }
 
     func loadMemories() async {
+        if let r = remote { await loadRemote(r); return }
         struct Mems: Decodable { var memories: [ChatMemory] }
         if let m: Mems = try? await api.get("v1/chat/memory") { memories = m.memories }
     }
@@ -67,22 +71,47 @@ final class ChatModel: ObservableObject {
         currentId = id
         error = nil
         guard let id else { messages = []; return }
+        if let r = remote {
+            if let doc = try? await CloudClient.shared.get(r, "chatConv/\(id)"),
+               let m = doc.decode([ChatMessage].self, "messages") { messages = m }
+            return
+        }
         struct Conv: Decodable { var messages: [ChatMessage] }
         if let c: Conv = try? await api.get("v1/chat/conversations/\(id)") { messages = c.messages }
     }
 
     func delete(_ id: String) async {
+        if let r = remote {
+            await request(r, ["op": "delete", "conversationId": id])
+            conversations.removeAll { $0.id == id }
+            if currentId == id { currentId = nil; messages = [] }
+            return
+        }
         let _: EmptyOK? = try? await api.write("DELETE", "v1/chat/conversations/\(id)")
         if currentId == id { currentId = nil; messages = [] }
         await load()
     }
 
     func deleteMemory(_ id: Int) async {
+        if let r = remote {
+            await request(r, ["op": "memory_delete", "memoryId": id])
+            memories.removeAll { $0.id == id }
+            return
+        }
         let _: EmptyOK? = try? await api.write("DELETE", "v1/chat/memory/\(id)")
         await loadMemories()
     }
 
-    func stop() { task?.cancel() }
+    func stop() {
+        if let r = remote, let rid = remoteRequest {
+            Task {
+                await request(r, ["op": "cancel", "target": rid])
+                try? await Task.sleep(for: .seconds(8))
+                try? await CloudClient.shared.delete(r, "chatResp/\(rid)")
+            }
+        }
+        task?.cancel()
+    }
 
     func send(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,6 +132,7 @@ final class ChatModel: ObservableObject {
     }
 
     private func stream(_ text: String) async {
+        if let r = remote { await streamRemote(r, text); return }
         defer {
             streaming = false
             task = nil
@@ -149,11 +179,108 @@ final class ChatModel: ObservableObject {
         streamTools = []
         await load()
     }
+
+    // MARK: Remote (viewer Mac → Firestore → helper Mac; see helper/brokerd/chat_relay.py)
+
+    private var remoteRequest: String?
+
+    private func loadRemote(_ r: CloudSession) async {
+        struct Index: Decodable { var conversations: [ChatConversation]; var memories: [ChatMemory]; var claude: Bool? }
+        do {
+            guard let doc = try await CloudClient.shared.get(r, "chat/index") else {
+                error = "아직 대화 목록이 없어요 — 헬퍼가 실행 중인 Mac(Mac mini)이 켜져 있어야 해요"
+                return
+            }
+            guard let i = doc.decode(Index.self, "data") else { return }
+            var convs = i.conversations
+            // Keep a conversation that was just created here but isn't mirrored yet.
+            if let id = currentId, !convs.contains(where: { $0.id == id }),
+               let mine = conversations.first(where: { $0.id == id }) { convs.insert(mine, at: 0) }
+            conversations = convs
+            memories = i.memories
+            claudeAvailable = i.claude ?? true
+            if error?.hasPrefix("아직 대화 목록") == true { error = nil }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Heartbeat so the helper polls fast while this chat is open. Runs until the view goes away.
+    func keepAlive() async {
+        guard let r = remote else { return }
+        while !Task.isCancelled {
+            try? await CloudClient.shared.put(r, "chatReq/presence", fields: ["until": Date().timeIntervalSince1970 + 180])
+            try? await Task.sleep(for: .seconds(60))
+        }
+    }
+
+    private func request(_ r: CloudSession, _ fields: [String: Any]) async {
+        var f = fields
+        f["created"] = Date().timeIntervalSince1970
+        do { try await CloudClient.shared.put(r, "chatReq/\(UUID().uuidString)", fields: f) }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func streamRemote(_ r: CloudSession, _ text: String) async {
+        let rid = UUID().uuidString
+        remoteRequest = rid
+        defer { streaming = false; task = nil; remoteRequest = nil }
+        var f: [String: Any] = ["op": "send", "message": text, "created": Date().timeIntervalSince1970,
+                                "model": UserDefaults.standard.string(forKey: "chatModel") ?? "sonnet"]
+        if let id = currentId { f["conversationId"] = id }
+        if let g = goalContext(), let d = try? JSONSerialization.data(withJSONObject: g) { f["goal"] = String(decoding: d, as: UTF8.self) }
+        do {
+            try await CloudClient.shared.put(r, "chatReq/presence", fields: ["until": Date().timeIntervalSince1970 + 180])
+            try await CloudClient.shared.put(r, "chatReq/\(rid)", fields: f)
+            let started = Date()
+            var acked = false
+            while true {
+                try await Task.sleep(for: .milliseconds(acked ? 600 : 1000))
+                guard let doc = try await CloudClient.shared.get(r, "chatResp/\(rid)") else {
+                    if Date().timeIntervalSince(started) > 40 {
+                        error = "Mac mini가 응답하지 않아요 — Mac mini가 켜져 있고 헬퍼가 실행 중인지 확인해주세요"
+                        try? await CloudClient.shared.delete(r, "chatReq/\(rid)")
+                        return
+                    }
+                    continue
+                }
+                acked = true
+                if currentId == nil, let id = doc.string("conversationId"), !id.isEmpty {
+                    currentId = id
+                    conversations.insert(ChatConversation(id: id, title: doc.string("title") ?? "", created: 0,
+                                                          updated: Int(Date().timeIntervalSince1970)), at: 0)
+                }
+                streamText = doc.string("text") ?? ""
+                streamTools = doc.decode([String].self, "tools") ?? []
+                let status = doc.string("status") ?? "streaming"
+                if status == "error" { error = doc.string("error") ?? "오류" }
+                if status == "done" || status == "error" {
+                    try? await CloudClient.shared.delete(r, "chatResp/\(rid)")
+                    break
+                }
+                if Date().timeIntervalSince(started) > 900 { error = "답변이 너무 오래 걸려요"; break }
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = error.localizedDescription
+        }
+        let reply = streamText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !reply.isEmpty {
+            messages.append(ChatMessage(id: -Int.random(in: 1...1_000_000), role: "assistant", text: reply,
+                                        tools: Array(NSOrderedSet(array: streamTools)) as? [String] ?? streamTools,
+                                        ts: Int(Date().timeIntervalSince1970)))
+        }
+        streamText = ""
+        streamTools = []
+        try? await Task.sleep(for: .seconds(1))
+        await loadRemote(r)
+    }
 }
 
 // MARK: - Views
 
 struct ChatView: View {
+    var remote: CloudSession? = nil
     @StateObject private var chat = ChatModel()
     @State private var input = ""
     @State private var showMemory = false
@@ -172,11 +299,13 @@ struct ChatView: View {
             }
         }
         .task {
+            chat.remote = remote
             await chat.load()
             // Land on the latest conversation instead of an empty chat.
             if chat.currentId == nil, let last = chat.conversations.max(by: { $0.updated < $1.updated }) {
                 await chat.open(last.id)
             }
+            await chat.keepAlive()
         }
         .sheet(isPresented: $showMemory) { MemorySheet(chat: chat) }
     }

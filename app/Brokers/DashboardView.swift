@@ -15,12 +15,14 @@ struct DashboardView: View {
             } else if tab == "chat" {
                 if model.helperReachable {
                     ChatView()
+                } else if model.cloudMode, let s = model.cloud {
+                    ChatView(remote: s)  // relayed through Firestore to the Mac running the helper
                 } else {
                     ContentUnavailableView {
                         Label("어시스턴트는 메인 Mac에서만 쓸 수 있어요", systemImage: "bubble.left.and.text.bubble.right")
                     } description: {
                         Text(model.cloudMode
-                             ? "이 Mac은 보기 전용이에요. 어시스턴트는 헬퍼가 실행 중인 Mac(Mac mini)에서 열어 주세요."
+                             ? "설정 > 동기화에서 Google 계정으로 로그인하면 Mac mini의 어시스턴트를 여기서도 쓸 수 있어요."
                              : "헬퍼에 연결할 수 없어요. 헬퍼가 실행 중인지 확인해 주세요.")
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

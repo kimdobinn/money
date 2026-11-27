@@ -130,6 +130,32 @@ actor CloudClient {
         _ = try await FormHTTP.json(http, req)
     }
 
+    /// Upsert with mixed fields: String → stringValue, numbers → doubleValue.
+    func put(_ s: CloudSession, _ path: String, fields values: [String: Any]) async throws {
+        var fields: [String: Any] = [:]
+        for (k, v) in values {
+            if let x = v as? String { fields[k] = ["stringValue": x] }
+            else if let x = v as? Double { fields[k] = ["doubleValue": x] }
+            else if let x = v as? Int { fields[k] = ["doubleValue": Double(x)] }
+        }
+        fields["updated"] = ["timestampValue": ISO8601DateFormatter().string(from: Date())]
+        var req = URLRequest(url: docURL(s, path))
+        req.httpMethod = "PATCH"
+        req.setValue("Bearer \(try await idToken(s))", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["fields": fields])
+        _ = try await FormHTTP.json(http, req)
+    }
+
+    func delete(_ s: CloudSession, _ path: String) async throws {
+        var req = URLRequest(url: docURL(s, path))
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(try await idToken(s))", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await http.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 || code == 404 else { throw CloudError.http(code, String(data: data, encoding: .utf8) ?? "") }
+    }
+
     func reset() { token = nil }
 }
 
